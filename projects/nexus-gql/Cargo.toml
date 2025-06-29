@@ -1,0 +1,17 @@
+[package]
+name = "nexus-gql"
+version = "0.1.0"
+edition = "2021"
+description = "Batch downloader from Nexus Mods, using GraphQL API."
+repository = "https://github.com/Sewer56/nexus-gql"
+license-file = "../../LICENSE"
+include = ["src/**/*"]
+readme = "../../README.MD"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+
+[dev-dependencies] 

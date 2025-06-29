@@ -1,0 +1,17 @@
+[package]
+name = "batch-downloader-cli"
+version = "0.1.0"
+edition = "2021"
+description = "Command-line interface for batch downloading from Nexus Mods using GraphQL API."
+repository = "https://github.com/Sewer56/nexus-gql"
+license-file = "../../LICENSE"
+readme = "../../README.MD"
+
+[[bin]]
+name = "batch-downloader-cli"
+path = "src/main.rs"
+
+[dependencies]
+nexus-gql = { path = "../nexus-gql" }
+
+[dev-dependencies] 
