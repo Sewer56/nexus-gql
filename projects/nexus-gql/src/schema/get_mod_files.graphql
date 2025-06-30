@@ -6,5 +6,6 @@ query GetModFiles($modId: ID!, $gameId: ID!) {
     modId
     fileId
     category
+    uri
   }
 } 

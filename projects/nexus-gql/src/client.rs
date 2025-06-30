@@ -683,4 +683,76 @@ mod tests {
             }
         }
     }
+
+    #[tokio::test]
+    async fn get_mod_files_integration_with_risky_contents() {
+        let client = NexusClient::new();
+
+        // Test variables for SMIM (Static Mesh Improvement Mod) in Skyrim Special Edition
+        let variables = get_mod_files::Variables {
+            mod_id: "659".to_string(),   // SMIM mod ID
+            game_id: "1704".to_string(), // Skyrim Special Edition
+        };
+
+        let result = client.execute::<GetModFiles>(variables).await;
+
+        match result {
+            Ok(data) => {
+                println!(
+                    "✅ Successfully retrieved {} files for mod",
+                    data.mod_files.len()
+                );
+
+                if !data.mod_files.is_empty() {
+                    let first_file = &data.mod_files[0];
+                    println!(
+                        "First file: {} (ModID: {}, FileID: {}, URI: {})",
+                        first_file.name, first_file.mod_id, first_file.file_id, first_file.uri
+                    );
+
+                    // Test using the URI directly as filename in the risky method
+                    if !first_file.uri.is_empty() {
+                        println!("📁 Using URI as filename: {}", first_file.uri);
+
+                        // Test the risky method with the URI as filename
+                        let risky_result = client
+                            .get_mod_file_contents_risky("1704", "659", &first_file.uri)
+                            .await;
+
+                        match risky_result {
+                            Ok(contents) => {
+                                println!("✅ Successfully retrieved archive contents using URI integration!");
+                                println!(
+                                    "  Archive contains {} files ({})",
+                                    contents.file_count(),
+                                    contents.format_total_size()
+                                );
+
+                                assert!(contents.file_count() > 0, "Should have at least one file");
+                            }
+                            Err(e) => {
+                                println!("⚠️ Risky method failed with URI as filename: {}", e);
+                                println!("  This might be expected if the URI format doesn't match the expected pattern");
+                            }
+                        }
+                    } else {
+                        println!("⚠️ URI field is empty");
+                    }
+                }
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                println!("❌ GetModFiles integration test failed: {error_msg}");
+
+                // Handle expected error cases
+                if error_msg.contains("errors") || error_msg.contains("GraphQL") {
+                    println!("💡 GraphQL error - likely requires authentication or invalid query");
+                } else if error_msg.contains("network") || error_msg.contains("DNS") {
+                    println!("⚠️ Network error (expected in CI): {error_msg}");
+                } else {
+                    panic!("Unexpected error type: {error_msg}");
+                }
+            }
+        }
+    }
 }

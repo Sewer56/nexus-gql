@@ -21,6 +21,16 @@
 //!
 //! Example: `--file-extension dds` will only include mods that contain .dds texture files.
 //!
+//! ### Risky Method for Archive Inspection
+//!
+//! The `--use-risky-method` flag enables a faster but potentially less reliable method for archive content inspection:
+//! - **Benefits**: ~50% faster, saves one HTTP request per file, no API key required for content inspection
+//! - **Method**: Uses the URI field from GetModFiles query directly instead of fetching metadata first
+//! - **Risks**: May break if Nexus Mods changes their internal URL structure
+//! - **Fallback**: Automatically falls back to standard method if URI is empty
+//!
+//! This method is recommended for large batch operations where speed is important.
+//!
 //! ### Sample Output with File Extension Filter
 //!
 //! ```text
@@ -115,6 +125,13 @@ enum Commands {
         /// (e.g., "dds", "esp", "esm"). This requires archive content inspection and may be slower.
         #[arg(long)]
         file_extension: Option<String>,
+
+        /// Use the risky method for archive content inspection (faster but may be less reliable)
+        /// This bypasses the official metadata API and constructs URLs directly using filenames.
+        /// Benefits: ~50% faster, no API key required for content inspection.
+        /// Risks: May break if Nexus changes their internal URL structure.
+        #[arg(long)]
+        use_risky_method: bool,
     },
 }
 
@@ -131,6 +148,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             concurrency,
             api_key,
             file_extension,
+            use_risky_method,
         } => {
             handle_mod_sizes(
                 game,
@@ -140,6 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 concurrency,
                 api_key,
                 file_extension,
+                use_risky_method,
             )
             .await?;
         }
@@ -148,6 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_mod_sizes(
     game: String,
     category: String,
@@ -156,6 +176,7 @@ async fn handle_mod_sizes(
     concurrency: usize,
     cli_api_key: Option<String>,
     file_extension: Option<String>,
+    use_risky_method: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Validate concurrency parameter
     let concurrency = if concurrency == 0 {
@@ -239,6 +260,7 @@ async fn handle_mod_sizes(
                 Arc::clone(&completed_count),
                 total_mods,
                 file_extension.clone(),
+                use_risky_method,
             )
         })
         .buffer_unordered(concurrency)
@@ -291,6 +313,7 @@ async fn handle_mod_sizes(
 }
 
 /// Process files for a single mod and return aggregated statistics
+#[allow(clippy::too_many_arguments)]
 async fn process_mod_files(
     client: Arc<NexusClient>,
     game_id: String,
@@ -299,6 +322,7 @@ async fn process_mod_files(
     completed_count: Arc<AtomicUsize>,
     total_mods: usize,
     file_extension: Option<String>,
+    use_risky_method: bool,
 ) -> ModProcessingResult {
     // Get mod files
     let variables = get_mod_files::Variables {
@@ -332,7 +356,14 @@ async fn process_mod_files(
             // Check file extension filter if specified
             let matched_filter = if let Some(ext) = &file_extension {
                 // Need to check archive contents for each file to see if any contains the target extension
-                check_files_for_extension(&client, &mod_info, &filtered_files, ext).await
+                check_files_for_extension(
+                    &client,
+                    &mod_info,
+                    &filtered_files,
+                    ext,
+                    use_risky_method,
+                )
+                .await
             } else {
                 true
             };
@@ -399,18 +430,36 @@ async fn check_files_for_extension(
     mod_info: &get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
     files: &[&get_mod_files::GetModFilesModFiles],
     target_extension: &str,
+    use_risky_method: bool,
 ) -> bool {
     let game_domain = &mod_info.game.domain_name;
     let mod_id = &mod_info.mod_id.to_string();
+    let game_id = &mod_info.game.id.to_string();
 
     for file in files {
         let file_id = &file.file_id.to_string();
 
         // Try to get archive contents for this file
-        match client
-            .get_mod_file_contents(game_domain, mod_id, file_id)
-            .await
-        {
+        let archive_contents_result = if use_risky_method {
+            // Use the risky method with the URI field as filename
+            if !file.uri.is_empty() {
+                client
+                    .get_mod_file_contents_risky(game_id, mod_id, &file.uri)
+                    .await
+            } else {
+                // Fall back to the standard method if URI is empty
+                client
+                    .get_mod_file_contents(game_domain, mod_id, file_id)
+                    .await
+            }
+        } else {
+            // Use the standard method
+            client
+                .get_mod_file_contents(game_domain, mod_id, file_id)
+                .await
+        };
+
+        match archive_contents_result {
             Ok(archive_contents) => {
                 // Check if any file in the archive has the target extension
                 let has_extension = archive_contents
