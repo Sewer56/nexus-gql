@@ -1,5 +1,6 @@
 use graphql_client::{GraphQLQuery, Response};
-use reqwest::Client as HttpClient;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde::de::DeserializeOwned;
 
 use crate::errors::{NexusError, Result};
@@ -33,7 +34,7 @@ impl Default for NexusConfig {
 /// GraphQL client for Nexus Mods API
 #[derive(Debug, Clone)]
 pub struct NexusClient {
-    client: HttpClient,
+    client: ClientWithMiddleware,
     config: NexusConfig,
 }
 
@@ -45,10 +46,16 @@ impl NexusClient {
 
     /// Create a new client with custom configuration
     pub fn with_config(config: NexusConfig) -> Self {
-        let client = HttpClient::builder()
+        let reqwest_client = reqwest::Client::builder()
             .user_agent(&config.user_agent)
             .build()
             .expect("Failed to create HTTP client");
+
+        // Set up retry policy with exponential backoff
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(5);
+        let client = ClientBuilder::new(reqwest_client)
+            .with(RetryTransientMiddleware::new_with_policy(retry_policy))
+            .build();
 
         Self { client, config }
     }
@@ -73,18 +80,19 @@ impl NexusClient {
     {
         let request_body = Q::build_query(variables);
 
-        let mut request = self
+        let mut request_builder = self
             .client
             .post(&self.config.api_url)
-            .header("Content-Type", "application/json")
-            .json(&request_body);
+            .header("Content-Type", "application/json");
 
         // Add API key if configured
         if let Some(ref api_key) = self.config.api_key {
-            request = request.header("apikey", api_key);
+            request_builder = request_builder.header("apikey", api_key);
         }
 
-        let response = request.send().await?;
+        // Serialize JSON body manually and send request
+        let json_body = serde_json::to_vec(&request_body)?;
+        let response = request_builder.body(json_body).send().await?;
 
         if !response.status().is_success() {
             let status = response.status();

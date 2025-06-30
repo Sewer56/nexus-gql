@@ -10,6 +10,10 @@ pub enum NexusError {
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
 
+    /// HTTP middleware errors
+    #[error("HTTP middleware error: {0}")]
+    Middleware(#[from] reqwest_middleware::Error),
+
     /// GraphQL errors from the API
     #[error("GraphQL error: {0}")]
     GraphQL(String),
