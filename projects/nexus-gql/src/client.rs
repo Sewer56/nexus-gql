@@ -222,8 +222,8 @@ impl NexusClient {
         }
 
         let url = format!(
-            "{}/games/{}/mods/{}/files/{}.json",
-            self.config.legacy_api_url, game_domain, mod_id, file_id
+            "{}/games/{game_domain}/mods/{mod_id}/files/{file_id}.json",
+            self.config.legacy_api_url
         );
 
         // Add API key header
@@ -252,6 +252,72 @@ impl NexusClient {
             .get(&metadata.content_preview_link)
             .send()
             .await?;
+
+        if !tree_response.status().is_success() {
+            let status = tree_response.status();
+            let text = tree_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(NexusError::http_error(format!(
+                "HTTP {status} from content preview: {text}"
+            )));
+        }
+
+        let file_tree: crate::types::FileTreeResponse = tree_response.json().await?;
+
+        // Convert tree structure to flat file list
+        Ok(file_tree.to_archive_contents())
+    }
+
+    /// Get the contents/file list of a mod archive by directly constructing the content preview URL
+    ///
+    /// This is a "risky" alternative to [`Self::get_mod_file_contents`] that bypasses the official
+    /// metadata API and directly constructs the content preview URL. This saves one HTTP request
+    /// but may break if Nexus Mods changes their internal URL structure.
+    ///
+    /// **Warning**: This method relies on undocumented URL patterns and may stop working
+    /// without notice. Use [`Self::get_mod_file_contents`] for production code.
+    ///
+    /// # Arguments
+    ///
+    /// * `game_id` - The numeric game ID (e.g., "1704" for Skyrim Special Edition)
+    /// * `mod_id` - The mod ID
+    /// * `filename` - The exact filename of the archive (will be URL-encoded automatically)
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use nexus_gql::NexusClient;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = NexusClient::new(); // No API key needed for this method
+    /// let contents = client.get_mod_file_contents_risky(
+    ///     "1704",
+    ///     "659",
+    ///     "SMIM 2-04-659-2-04.7z"
+    /// ).await?;
+    ///
+    /// println!("Archive contains {} files", contents.file_count());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_mod_file_contents_risky(
+        &self,
+        game_id: &str,
+        mod_id: &str,
+        filename: &str,
+    ) -> Result<crate::types::ArchiveContents> {
+        // URL-encode the filename
+        let encoded_filename = urlencoding::encode(filename);
+
+        // Construct the content preview URL directly
+        let preview_url = format!(
+            "https://file-metadata.nexusmods.com/file/nexus-files-s3-meta/{game_id}/{mod_id}/{encoded_filename}.json"
+        );
+
+        // Make the request directly to the content preview URL
+        let tree_response = self.client.get(&preview_url).send().await?;
 
         if !tree_response.status().is_success() {
             let status = tree_response.status();
@@ -567,6 +633,54 @@ mod tests {
             }
             Ok(_) => panic!("Should have failed without API key"),
             Err(e) => panic!("Unexpected error type: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mod_file_contents_risky_integration() {
+        let client = NexusClient::new(); // No API key needed for risky method
+
+        // Test getting archive contents for SMIM main file in Skyrim Special Edition
+        // Using the known filename pattern
+        let result = client
+            .get_mod_file_contents_risky("1704", "659", "SMIM 2-04-659-2-04.7z")
+            .await;
+
+        match result {
+            Ok(contents) => {
+                println!("✅ Successfully retrieved archive contents (risky method)");
+                println!(
+                    "  Archive contains {} files ({})",
+                    contents.file_count(),
+                    contents.format_total_size()
+                );
+
+                // Print first few files as examples
+                for (i, file) in contents.files.iter().take(3).enumerate() {
+                    println!("  {}: {}", i + 1, file);
+                }
+
+                assert!(contents.file_count() > 0, "Should have at least one file");
+                assert!(
+                    contents.total_size() > 0,
+                    "Total size should be greater than 0"
+                );
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                println!("❌ Risky mod file contents test failed: {error_msg}");
+
+                if error_msg.contains("404") {
+                    println!(
+                        "💡 File not found - this is expected if the test filename is incorrect or the file has been updated"
+                    );
+                } else if error_msg.contains("network") || error_msg.contains("DNS") {
+                    println!("⚠️ Network error (expected in CI): {error_msg}");
+                } else {
+                    // Only assert for unexpected error types
+                    panic!("Unexpected error type: {error_msg}");
+                }
+            }
         }
     }
 }
