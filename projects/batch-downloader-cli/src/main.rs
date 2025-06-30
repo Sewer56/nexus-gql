@@ -354,7 +354,7 @@ async fn process_mod_files(
                 .sum();
 
             // Check file extension filter if specified
-            let matched_filter = if let Some(ext) = &file_extension {
+            let matched_file_extension = if let Some(ext) = &file_extension {
                 // Need to check archive contents for each file to see if any contains the target extension
                 check_files_for_extension(
                     &client,
@@ -368,7 +368,7 @@ async fn process_mod_files(
                 true
             };
 
-            if !filtered_files.is_empty() && (file_extension.is_none() || matched_filter) {
+            if !filtered_files.is_empty() {
                 print_mod_processing_success(
                     completed,
                     total_mods,
@@ -377,7 +377,7 @@ async fn process_mod_files(
                     filtered_files.len(),
                     mod_size,
                     main_files_only,
-                    matched_filter,
+                    matched_file_extension,
                 );
 
                 ModProcessingResult {
@@ -385,7 +385,7 @@ async fn process_mod_files(
                     mods_with_files: 1,
                     total_files: filtered_files.len(),
                     total_size: mod_size,
-                    matched_filter,
+                    matched_filter: matched_file_extension,
                 }
             } else {
                 print_mod_no_files(
@@ -401,7 +401,7 @@ async fn process_mod_files(
                     mods_with_files: 0,
                     total_files: 0,
                     total_size: 0,
-                    matched_filter,
+                    matched_filter: matched_file_extension,
                 }
             }
         }
