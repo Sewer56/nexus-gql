@@ -14,8 +14,10 @@ path = "src/main.rs"
 [dependencies]
 nexus-gql = { path = "../nexus-gql" }
 graphql_client = "0.14"
-tokio = { version = "1.45", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "fs", "process"] }
 clap = { version = "4.0", features = ["derive"] }
 futures = "0.3"
+reqwest = { version = "0.12", features = ["stream"] }
+tokio-util = { version = "0.7", features = ["io"] }
 
 [dev-dependencies] 

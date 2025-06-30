@@ -10,6 +10,17 @@
 //! - **Archive Content Inspection**: Deep inspection of mod archive contents using the legacy REST API
 //! - **Concurrent Processing**: Configurable concurrency for faster analysis
 //! - **Authentication**: Support for authenticated requests via API key
+//! - **Download and Extraction**: Actually download and extract mod files with filtering support
+//!
+//! ## Download and Extraction
+//!
+//! The tool now supports downloading and extracting mod files in addition to analysis:
+//! - Use `--download` flag to enable download mode
+//! - Specify `--output-path` to set where files should be downloaded and extracted
+//! - Extraction happens immediately after each download with the same concurrency as `--concurrency`
+//! - Requires 7-zip CLI (`7z` command) to be installed for extraction
+//! - Archives are automatically deleted after successful extraction
+//! - If file extension filtering is enabled, only matching files are kept while preserving directory structure
 //!
 //! ## Archive Content Inspection
 //!
@@ -23,12 +34,14 @@
 //!
 //! The `--file-extension` option enables filtering mods based on files contained within their archives.
 //! This feature:
-//! - Uses the `get_mod_file_contents` method to inspect archive contents
+//! - Uses the `get_mod_file_contents` method to inspect archive contents before downloading
 //! - Returns only mods where at least one archive contains a file with the specified extension
+//! - **When downloading**: Only downloads and extracts files that contain the target extension (saves bandwidth!)
 //! - Requires an API key for archive content inspection
 //! - May be slower than basic file analysis due to additional API calls
+//! - When used with `--download`, only files matching the extension are extracted
 //!
-//! Example: `--file-extension dds` will only include mods that contain .dds texture files.
+//! Example: `--file-extension dds` will only include mods that contain .dds texture files, and when downloading, will only download those specific files containing textures.
 //!
 //! ### Risky Method for Archive Inspection
 //!
@@ -39,6 +52,19 @@
 //! - **Fallback**: Automatically falls back to standard method if URI is empty
 //!
 //! This method is recommended for large batch operations where speed is important.
+//!
+//! ### Sample Usage
+//!
+//! ```bash
+//! # Analyze only (default)
+//! batch-downloader-cli mod-sizes --game skyrimspecialedition --category "Models and Textures" --count 100
+//!
+//! # Download and extract all files (concurrency controls both download and extraction)
+//! batch-downloader-cli mod-sizes --game skyrimspecialedition --category "Models and Textures" --count 10 --download --output-path ./downloads --concurrency 6
+//!
+//! # Download only mods containing .dds files, extract only .dds files
+//! batch-downloader-cli mod-sizes --game skyrimspecialedition --category "Models and Textures" --count 10 --download --output-path ./downloads --file-extension dds
+//! ```
 //!
 //! ### Sample Output with File Extension Filter
 //!
@@ -85,7 +111,7 @@
 //! ```
 
 use clap::{Parser, Subcommand};
-use futures::{stream, StreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use nexus_gql::{
     get_game, get_mod_files, get_popular_mods_for_game_and_category_by_endorsements_descending,
     types::ByteSizeString, GetGame, GetModFiles,
@@ -94,8 +120,14 @@ use nexus_gql::{
 use std::{
     collections::HashMap,
     env,
+    path::Path,
     sync::atomic::{AtomicUsize, Ordering},
     sync::Arc,
+};
+use tokio::{
+    fs::{remove_file, File},
+    io::AsyncWriteExt,
+    process::Command,
 };
 
 /// Statistics for a group of mods
@@ -230,6 +262,14 @@ enum Commands {
         /// Risks: May break if Nexus changes their internal URL structure.
         #[arg(long)]
         use_risky_method: bool,
+
+        /// Output path for downloaded and extracted files
+        #[arg(short, long)]
+        output_path: Option<String>,
+
+        /// Actually download and extract files (default is analyze only)
+        #[arg(long)]
+        download: bool,
     },
 }
 
@@ -247,6 +287,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             api_key,
             file_extension,
             use_risky_method,
+            output_path,
+            download,
         } => {
             handle_mod_sizes(
                 game,
@@ -257,6 +299,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 api_key,
                 file_extension,
                 use_risky_method,
+                output_path,
+                download,
             )
             .await?;
         }
@@ -275,6 +319,8 @@ async fn handle_mod_sizes(
     cli_api_key: Option<String>,
     file_extension: Option<String>,
     use_risky_method: bool,
+    output_path: Option<String>,
+    download: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Validate concurrency parameter
     let concurrency = if concurrency == 0 {
@@ -285,6 +331,31 @@ async fn handle_mod_sizes(
     } else {
         concurrency
     };
+
+    // Validate download parameters
+    if download {
+        if output_path.is_none() {
+            return Err("Output path is required when downloading files. Use --output-path".into());
+        }
+
+        // Check if 7z is available
+        if (tokio::process::Command::new("7z")
+            .arg("--help")
+            .output()
+            .await)
+            .is_err()
+        {
+            return Err(
+                "7z command not found. Please install 7-zip to use extraction functionality".into(),
+            );
+        }
+
+        println!("🚀 Download mode enabled - files will be downloaded and extracted");
+        println!("📂 Output path: {}", output_path.as_ref().unwrap());
+        println!("🔧 Extraction concurrency: {concurrency}");
+    } else {
+        println!("🔍 Analysis mode - no files will be downloaded");
+    }
 
     // Get API key from CLI argument or environment variable
     let api_key = cli_api_key
@@ -347,6 +418,13 @@ async fn handle_mod_sizes(
     let completed_count = Arc::new(AtomicUsize::new(0));
     let total_mods = all_mods.len();
 
+    // Create output directory if downloading
+    if download {
+        let output_dir = output_path.as_ref().unwrap();
+        tokio::fs::create_dir_all(output_dir).await?;
+        println!("📁 Created output directory: {output_dir}");
+    }
+
     // Analyze mod file sizes concurrently
     let results = stream::iter(all_mods.iter())
         .map(|mod_info| {
@@ -359,6 +437,8 @@ async fn handle_mod_sizes(
                 total_mods,
                 file_extension.clone(),
                 use_risky_method,
+                output_path.clone(),
+                download,
             )
         })
         .buffer_unordered(concurrency)
@@ -417,6 +497,8 @@ async fn process_mod_files(
     total_mods: usize,
     file_extension: Option<String>,
     use_risky_method: bool,
+    output_path: Option<String>,
+    download: bool,
 ) -> ModProcessingResult {
     // Get mod files
     let variables = get_mod_files::Variables {
@@ -448,15 +530,41 @@ async fn process_mod_files(
                 .sum();
 
             // Always get archive contents for file extension breakdown
-            let (matched_file_extension, archive_inspected, file_extension_stats) =
-                get_archive_contents_and_check_filter(
+            let (
+                matched_file_extension,
+                archive_inspected,
+                file_extension_stats,
+                files_to_download,
+            ) = get_archive_contents_and_check_filter(
+                &client,
+                &mod_info,
+                &filtered_files,
+                file_extension.as_ref(),
+                use_risky_method,
+            )
+            .await;
+
+            // Download and extract files if requested
+            if let (true, Some(output_path_ref)) = (download, output_path.as_ref()) {
+                let skipped_count = filtered_files.len() - files_to_download.len();
+                if skipped_count > 0 {
+                    println!(
+                        "⏭️ Skipping {skipped_count} files that don't contain target extension"
+                    );
+                }
+
+                if let Err(e) = download_and_extract_mod_files(
                     &client,
                     &mod_info,
-                    &filtered_files,
+                    &files_to_download,
+                    output_path_ref,
                     file_extension.as_ref(),
-                    use_risky_method,
                 )
-                .await;
+                .await
+                {
+                    println!("❌ Failed to download/extract mod {}: {e}", mod_info.name);
+                }
+            }
 
             if !filtered_files.is_empty() {
                 print_mod_processing_success(
@@ -521,14 +629,19 @@ async fn process_mod_files(
 }
 
 /// Get archive contents and collect file extension statistics, also checking if filter matches
-/// Returns (matched_filter, archive_inspected, file_extension_stats) tuple
+/// Returns (matched_filter, archive_inspected, file_extension_stats, files_to_download) tuple
 async fn get_archive_contents_and_check_filter(
     client: &NexusClient,
     mod_info: &get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
     files: &[&get_mod_files::GetModFilesModFiles],
     target_extension: Option<&String>,
     use_risky_method: bool,
-) -> (bool, bool, FileExtensionStatistics) {
+) -> (
+    bool,
+    bool,
+    FileExtensionStatistics,
+    Vec<get_mod_files::GetModFilesModFiles>,
+) {
     let game_domain = &mod_info.game.domain_name;
     let mod_id = &mod_info.mod_id.to_string();
     let game_id = &mod_info.game.id.to_string();
@@ -536,9 +649,11 @@ async fn get_archive_contents_and_check_filter(
     let mut archive_inspected = false;
     let mut matched_filter = true; // Default to true if no filter is specified
     let mut file_extension_stats = FileExtensionStatistics::default();
+    let mut files_to_download = Vec::new();
 
     for file in files {
         let file_id = &file.file_id.to_string();
+        let mut file_contains_target = false;
 
         // Try to get archive contents for this file
         let archive_contents_result = if use_risky_method {
@@ -580,14 +695,28 @@ async fn get_archive_contents_and_check_filter(
                         .iter()
                         .any(|archive_file| archive_file.extension() == Some(target_ext));
 
+                    file_contains_target = has_extension;
                     if !has_extension {
                         matched_filter = false;
                     }
                 }
+
+                // Decide whether to download this file
+                if target_extension.is_some() {
+                    // If filtering is enabled, only download files that contain the target extension
+                    if file_contains_target {
+                        files_to_download.push((*file).clone());
+                    }
+                } else {
+                    // No filter, download all files
+                    files_to_download.push((*file).clone());
+                }
             }
             Err(_) => {
-                // If we can't get archive contents, skip this file
-                // This might happen for files that don't have content preview available
+                // If we can't get archive contents, skip this file for filtering but include for download if no filter
+                if target_extension.is_none() {
+                    files_to_download.push((*file).clone());
+                }
                 continue;
             }
         }
@@ -598,7 +727,12 @@ async fn get_archive_contents_and_check_filter(
         matched_filter = false;
     }
 
-    (matched_filter, archive_inspected, file_extension_stats)
+    (
+        matched_filter,
+        archive_inspected,
+        file_extension_stats,
+        files_to_download,
+    )
 }
 
 /// Print successful mod processing result
@@ -827,4 +961,277 @@ async fn resolve_game_id(
         }
         None => Err(format!("Game not found for domain: {game_identifier}").into()),
     }
+}
+
+/// Download and extract mod files for a single mod
+async fn download_and_extract_mod_files(
+    client: &NexusClient,
+    mod_info: &get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
+    files: &[get_mod_files::GetModFilesModFiles],
+    output_path: &str,
+    file_extension_filter: Option<&String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let game_domain = &mod_info.game.domain_name;
+    let mod_id = mod_info.mod_id.to_string();
+    let mod_name = sanitize_filename(&mod_info.name);
+
+    // Create mod directory
+    let mod_dir = Path::new(output_path).join(&mod_name);
+    if let Err(e) = tokio::fs::create_dir_all(&mod_dir).await {
+        println!(
+            "❌ Failed to create mod directory {}: {}",
+            mod_dir.display(),
+            e
+        );
+        return Ok(());
+    }
+
+    // Download and extract files sequentially for this mod
+    for file in files {
+        let client = client.clone();
+        let game_domain = game_domain.clone();
+        let mod_id = mod_id.clone();
+        let file_id = file.file_id.to_string();
+        let file_name = sanitize_filename(&file.name);
+        let mod_dir = mod_dir.clone();
+        let file_extension_filter = file_extension_filter.cloned();
+
+        if let Err(e) = download_and_extract_single_file(
+            &client,
+            &game_domain,
+            &mod_id,
+            &file_id,
+            &file_name,
+            &mod_dir,
+            file_extension_filter.as_ref(),
+        )
+        .await
+        {
+            println!("❌ Download task failed: {e}");
+        }
+    }
+
+    // Clean up empty mod directory if no files remain after processing
+    if let Err(e) = cleanup_empty_mod_directory(&mod_dir).await {
+        println!(
+            "⚠️ Failed to cleanup mod directory {}: {e}",
+            mod_dir.display()
+        );
+    }
+
+    Ok(())
+}
+
+/// Download and extract a single mod file
+#[allow(clippy::too_many_arguments)]
+async fn download_and_extract_single_file(
+    client: &NexusClient,
+    game_domain: &str,
+    mod_id: &str,
+    file_id: &str,
+    file_name: &str,
+    mod_dir: &Path,
+    file_extension_filter: Option<&String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Get download links
+    let download_links = client.download_links(game_domain, mod_id, file_id).await?;
+
+    if download_links.is_empty() {
+        println!("⚠️ No download links available for file: {file_name}");
+        return Ok(());
+    }
+
+    // Use the first available download link
+    let download_url = &download_links[0].uri;
+
+    // Create file path
+    let file_path = mod_dir.join(file_name);
+
+    // Download the file
+    println!("📥 Downloading: {file_name}");
+    let response = reqwest::get(download_url).await?;
+
+    if !response.status().is_success() {
+        return Err(format!("Failed to download file: HTTP {}", response.status()).into());
+    }
+
+    // Save file to disk
+    let mut file = File::create(&file_path).await?;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.try_next().await? {
+        file.write_all(&chunk).await?;
+    }
+    file.flush().await?;
+
+    println!("✅ Downloaded: {file_name}");
+
+    // Extract the file and remove archive regardless of extraction success
+    let extraction_result = extract_archive(&file_path, mod_dir, file_extension_filter).await;
+
+    // Always remove the original archive file after download
+    if file_path.exists() {
+        if let Err(e) = remove_file(&file_path).await {
+            println!(
+                "⚠️ Failed to remove archive file {}: {e}",
+                file_path.display()
+            );
+        }
+    }
+
+    // Return extraction result after cleanup
+    extraction_result?;
+
+    Ok(())
+}
+
+/// Extract an archive using 7z and optionally filter files
+async fn extract_archive(
+    archive_path: &Path,
+    extract_to: &Path,
+    file_extension_filter: Option<&String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Extract using 7z directly to destination
+    println!(
+        "🔧 Extracting: {}",
+        archive_path.file_name().unwrap().to_string_lossy()
+    );
+
+    let output = Command::new("7z")
+        .arg("x")
+        .arg(archive_path)
+        .arg("-y") // Assume yes for all prompts
+        .arg(format!("-o{}", extract_to.display()))
+        .output()
+        .await?;
+
+    if !output.status.success() {
+        let error_msg = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("7z extraction failed: {error_msg}").into());
+    }
+
+    // If file extension filter is specified, remove non-matching files
+    if let Some(target_extension) = file_extension_filter {
+        filter_files_in_place(extract_to, target_extension).await?;
+    }
+
+    println!(
+        "✅ Extracted: {}",
+        archive_path.file_name().unwrap().to_string_lossy()
+    );
+
+    Ok(())
+}
+
+/// Remove files that don't match the extension filter while preserving directory structure
+async fn filter_files_in_place(
+    directory: &Path,
+    target_extension: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut dirs_to_process = vec![directory.to_path_buf()];
+
+    while let Some(current_dir) = dirs_to_process.pop() {
+        let mut entries = tokio::fs::read_dir(&current_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+
+            if path.is_dir() {
+                // Add subdirectory to processing queue
+                dirs_to_process.push(path);
+            } else if let Some(extension) = path.extension() {
+                // Remove file if it doesn't match the target extension
+                if extension.to_string_lossy().to_lowercase() != target_extension.to_lowercase() {
+                    if let Err(e) = tokio::fs::remove_file(&path).await {
+                        println!("⚠️ Failed to remove file {}: {e}", path.display());
+                    }
+                }
+            } else {
+                // Remove files without extensions if we're filtering
+                if let Err(e) = tokio::fs::remove_file(&path).await {
+                    println!("⚠️ Failed to remove file {}: {e}", path.display());
+                }
+            }
+        }
+    }
+
+    // Remove empty directories after filtering
+    remove_empty_directories(directory).await?;
+
+    Ok(())
+}
+
+/// Remove empty directories recursively
+async fn remove_empty_directories(
+    directory: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Collect all directories using iterative approach
+    let mut all_dirs = Vec::new();
+    let mut dirs_to_process = vec![directory.to_path_buf()];
+
+    while let Some(current_dir) = dirs_to_process.pop() {
+        let mut entries = tokio::fs::read_dir(&current_dir).await?;
+
+        while let Some(entry) = entries.next_entry().await? {
+            let path = entry.path();
+            if path.is_dir() {
+                all_dirs.push(path.clone());
+                dirs_to_process.push(path);
+            }
+        }
+    }
+
+    // Sort by depth (deepest first) to ensure we remove subdirectories before parents
+    all_dirs.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+
+    // Try to remove each directory if it's empty
+    for dir_path in all_dirs {
+        if dir_path != directory {
+            // Don't remove the root directory
+            if is_directory_empty(&dir_path).await? {
+                if let Err(e) = tokio::fs::remove_dir(&dir_path).await {
+                    println!(
+                        "⚠️ Failed to remove empty directory {}: {e}",
+                        dir_path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Check if a directory is empty
+async fn is_directory_empty(
+    directory: &Path,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    let mut entries = tokio::fs::read_dir(directory).await?;
+    Ok(entries.next_entry().await?.is_none())
+}
+
+/// Sanitize filename for filesystem use
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c => c,
+        })
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+/// Clean up empty mod directory if no files remain after processing
+async fn cleanup_empty_mod_directory(
+    directory: &Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut entries = tokio::fs::read_dir(directory).await?;
+
+    // If directory is empty, remove it
+    if entries.next_entry().await?.is_none() {
+        tokio::fs::remove_dir(directory).await?;
+    }
+
+    Ok(())
 }
