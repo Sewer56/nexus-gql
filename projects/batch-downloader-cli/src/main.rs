@@ -760,12 +760,19 @@ fn print_summary(
     // Show file type breakdown
     if !file_extension_stats.extensions.is_empty() {
         println!("\n📄 FILE TYPE BREAKDOWN (Top 10)");
-        println!("══════════════════════════════════════════════════════════════════");
+        println!("════════════════════════════════════════════════════════════════════════════");
         println!(
-            "{:<10} {:<15} {:<15} {:<15}",
-            "Extension", "Item Count", "Total Size", "Average Size"
+            "{:<10} {:<15} {:<15} {:<15} {:<10}",
+            "Extension", "Item Count", "Total Size", "Average Size", "% of Total"
         );
-        println!("──────────────────────────────────────────────────────────────────");
+        println!("────────────────────────────────────────────────────────────────────────────");
+
+        // Calculate total size across all extensions for percentage calculation
+        let total_all_extensions: u64 = file_extension_stats
+            .extensions
+            .values()
+            .map(|(_, size)| size)
+            .sum();
 
         for (extension, (count, total_size)) in
             file_extension_stats.sorted_by_size().iter().take(10)
@@ -775,12 +782,18 @@ fn print_summary(
             } else {
                 0
             };
+            let percentage = if total_all_extensions > 0 {
+                (*total_size as f64 / total_all_extensions as f64) * 100.0
+            } else {
+                0.0
+            };
             println!(
-                "{:<10} {:<15} {:<15} {:<15}",
+                "{:<10} {:<15} {:<15} {:<15} {:<10}",
                 format!(".{}", extension),
                 count,
                 ByteSizeString::from_u64(*total_size).format_bytes(),
-                ByteSizeString::from_u64(average_size).format_bytes()
+                ByteSizeString::from_u64(average_size).format_bytes(),
+                format!("{:.1}%", percentage)
             );
         }
     }
