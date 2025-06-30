@@ -1,12 +1,15 @@
 #![doc = include_str!("../../../README.MD")]
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
+
 #[cfg(feature = "std")]
 extern crate std;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+// Re-export essential types for users
+pub use client::{NexusClient, NexusConfig};
+pub use errors::{NexusError, Result};
+pub use queries::*;
+
+// Core modules
+pub mod client;
+pub mod errors;
+pub mod queries;

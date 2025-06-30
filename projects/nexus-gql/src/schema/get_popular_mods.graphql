@@ -1,0 +1,49 @@
+query GetPopularModsForGameAndCategoryByEndorsementsDescending(
+  $gameId: String!,
+  $categoryName: String!,
+  $count: Int = 20,
+  $offset: Int = 0
+) {
+  mods(
+    count: $count,
+    offset: $offset,
+    filter: {
+      gameId: { op: EQUALS, value: $gameId },
+      categoryName: { op: EQUALS, value: $categoryName }
+    },
+    sort: [{ endorsements: { direction: DESC } }]
+  ) {
+    nodes {
+      id
+      modId
+      name
+      summary
+      description
+      endorsements
+      downloads
+      createdAt
+      updatedAt
+      uid
+      version
+      pictureUrl
+      thumbnailUrl
+      adultContent
+      game {
+        id
+        name
+        domainName
+      }
+      modCategory {
+        id
+        name
+      }
+      uploader {
+        memberId
+        name
+        avatar
+      }
+    }
+    totalCount
+    nodesCount
+  }
+} 

@@ -1,0 +1,12 @@
+query GetModFiles($modId: ID!, $gameId: ID!) {
+  modFiles(modId: $modId, gameId: $gameId) {
+    id
+    name
+    version
+    sizeInBytes
+    date
+    uid
+    modId
+    fileId
+  }
+} 

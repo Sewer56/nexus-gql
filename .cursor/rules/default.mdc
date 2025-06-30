@@ -16,6 +16,7 @@ It provides a library, used for accessing Nexus via GraphQL, and a binary, used 
 
 - Use proper rustdoc format with elements in brackets like [`Color565`] instead of `Color565`
 - Maintain original code order (including assembly sections) and all comments intact unless explicitly permitted
+- When printing, inline variables during formatting like `println!("Text: {text}");`
 
 ### Variable Names & Structure
 

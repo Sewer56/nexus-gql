@@ -26,6 +26,10 @@ other useful info.
 
 Batch downloader from Nexus Mods, using GraphQL API.
 
+## Testing
+
+You will need to setup an API key.
+
 ## Development
 
 For information on how to work with this codebase, see [README-DEV.MD](README-DEV.MD).
