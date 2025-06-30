@@ -1,5 +1,8 @@
 //! # Batch Downloader CLI
 //!
+//! This is buggy, messy, mostly LLM generated code for one time use only.
+//! Don't use any of this in production, it's bad.
+//!
 //! Command-line interface for batch downloading and analyzing mods from Nexus Mods using the GraphQL API.
 //!
 //! ## Features
