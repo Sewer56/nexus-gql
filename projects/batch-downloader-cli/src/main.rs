@@ -996,7 +996,9 @@ async fn download_and_extract_mod_files(
         let mod_id = mod_id.clone();
         let file_id = file.file_id.to_string();
         let file_name = sanitize_filename(&file.name);
-        let mod_dir = mod_dir.clone();
+
+        // Create a separate folder for each file to avoid conflicts
+        let file_dir = mod_dir.join(&file_name);
         let file_extension_filter = file_extension_filter.cloned();
 
         if let Err(e) = download_and_extract_single_file(
@@ -1005,17 +1007,25 @@ async fn download_and_extract_mod_files(
             &mod_id,
             &file_id,
             &file_name,
-            &mod_dir,
+            &file_dir,
             file_extension_filter.as_ref(),
         )
         .await
         {
             println!("❌ Download task failed: {e}");
         }
+
+        // Clean up empty file directory if no files remain after processing
+        if let Err(e) = cleanup_empty_directory(&file_dir).await {
+            println!(
+                "⚠️ Failed to cleanup file directory {}: {e}",
+                file_dir.display()
+            );
+        }
     }
 
-    // Clean up empty mod directory if no files remain after processing
-    if let Err(e) = cleanup_empty_mod_directory(&mod_dir).await {
+    // Clean up empty mod directory if no file directories remain
+    if let Err(e) = cleanup_empty_directory(&mod_dir).await {
         println!(
             "⚠️ Failed to cleanup mod directory {}: {e}",
             mod_dir.display()
@@ -1033,9 +1043,19 @@ async fn download_and_extract_single_file(
     mod_id: &str,
     file_id: &str,
     file_name: &str,
-    mod_dir: &Path,
+    file_dir: &Path,
     file_extension_filter: Option<&String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Create the file-specific directory
+    if let Err(e) = tokio::fs::create_dir_all(file_dir).await {
+        println!(
+            "❌ Failed to create file directory {}: {}",
+            file_dir.display(),
+            e
+        );
+        return Ok(());
+    }
+
     // Get download links
     let download_links = client.download_links(game_domain, mod_id, file_id).await?;
 
@@ -1047,8 +1067,8 @@ async fn download_and_extract_single_file(
     // Use the first available download link
     let download_url = &download_links[0].uri;
 
-    // Create file path
-    let file_path = mod_dir.join(file_name);
+    // Create file path within the file-specific directory
+    let file_path = file_dir.join(file_name);
 
     // Download the file
     println!("📥 Downloading: {file_name}");
@@ -1070,7 +1090,7 @@ async fn download_and_extract_single_file(
     println!("✅ Downloaded: {file_name}");
 
     // Extract the file and remove archive regardless of extraction success
-    let extraction_result = extract_archive(&file_path, mod_dir, file_extension_filter).await;
+    let extraction_result = extract_archive(&file_path, file_dir, file_extension_filter).await;
 
     // Always remove the original archive file after download
     if file_path.exists() {
@@ -1225,8 +1245,8 @@ fn sanitize_filename(name: &str) -> String {
         .to_string()
 }
 
-/// Clean up empty mod directory if no files remain after processing
-async fn cleanup_empty_mod_directory(
+/// Clean up empty directory if no files remain after processing
+async fn cleanup_empty_directory(
     directory: &Path,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut entries = tokio::fs::read_dir(directory).await?;
