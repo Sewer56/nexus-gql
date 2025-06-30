@@ -78,6 +78,40 @@ use std::{
     sync::Arc,
 };
 
+/// Statistics for a group of mods
+#[derive(Debug, Clone, Default)]
+pub struct ModStatistics {
+    /// Total number of mods in this group
+    pub total_mods: usize,
+    /// Number of mods with files
+    pub mods_with_files: usize,
+    /// Total number of files across all mods
+    pub total_files: usize,
+    /// Total size of all files across all mods
+    pub total_size: u64,
+}
+
+impl ModStatistics {
+    /// Add statistics from a single mod to this group
+    pub fn add_mod(&mut self, has_files: bool, file_count: usize, total_size: u64) {
+        self.total_mods += 1;
+        if has_files {
+            self.mods_with_files += 1;
+            self.total_files += file_count;
+            self.total_size += total_size;
+        }
+    }
+
+    /// Calculate average mod size for mods with files
+    pub fn average_mod_size(&self) -> Option<u64> {
+        if self.mods_with_files > 0 {
+            Some(self.total_size / self.mods_with_files as u64)
+        } else {
+            None
+        }
+    }
+}
+
 /// Result of processing a single mod's files
 #[derive(Debug, Clone)]
 pub struct ModProcessingResult {
@@ -277,46 +311,25 @@ async fn handle_mod_sizes(
         .collect::<Vec<_>>()
         .await;
 
-    // Aggregate results
-    let mut total_size = 0u64;
-    let mut mods_with_files = 0;
-    let mut total_files = 0;
-    let mut filtered_mods = 0;
-
-    // Statistics for archive inspected mods
-    let mut archive_inspected_mods = 0;
-    let mut archive_inspected_total_size = 0u64;
-    let mut archive_inspected_mods_with_files = 0;
-    let mut archive_inspected_total_files = 0;
-
-    // Statistics for filtered mods only
-    let mut filtered_total_size = 0u64;
-    let mut filtered_mods_with_files = 0;
-    let mut filtered_total_files = 0;
+    // Aggregate results using ModStatistics
+    let mut all_stats = ModStatistics::default();
+    let mut archive_inspected_stats = ModStatistics::default();
+    let mut filtered_stats = ModStatistics::default();
 
     for result in results {
-        mods_with_files += result.mods_with_files;
-        total_files += result.total_files;
-        total_size += result.total_size;
+        let has_files = result.mods_with_files > 0;
 
-        // Track stats for mods where we successfully inspected archives
+        // All mods statistics
+        all_stats.add_mod(has_files, result.total_files, result.total_size);
+
+        // Archive inspected mods statistics
         if result.archive_inspected {
-            archive_inspected_mods += 1;
-            if result.mods_with_files > 0 {
-                archive_inspected_mods_with_files += result.mods_with_files;
-                archive_inspected_total_files += result.total_files;
-                archive_inspected_total_size += result.total_size;
-            }
+            archive_inspected_stats.add_mod(has_files, result.total_files, result.total_size);
         }
 
-        // Track stats for mods that matched the filter
+        // Filtered mods statistics
         if result.matched_filter {
-            filtered_mods += 1;
-            if result.mods_with_files > 0 {
-                filtered_mods_with_files += result.mods_with_files;
-                filtered_total_files += result.total_files;
-                filtered_total_size += result.total_size;
-            }
+            filtered_stats.add_mod(has_files, result.total_files, result.total_size);
         }
     }
 
@@ -325,18 +338,10 @@ async fn handle_mod_sizes(
         &game_id,
         &category,
         all_mods.len(),
-        mods_with_files,
-        total_files,
-        total_size,
+        &all_stats,
         &file_extension,
-        archive_inspected_mods,
-        archive_inspected_mods_with_files,
-        archive_inspected_total_files,
-        archive_inspected_total_size,
-        filtered_mods,
-        filtered_mods_with_files,
-        filtered_total_files,
-        filtered_total_size,
+        &archive_inspected_stats,
+        &filtered_stats,
     );
 
     Ok(())
@@ -594,18 +599,10 @@ fn print_summary(
     game_id: &str,
     category: &str,
     total_mods_analyzed: usize,
-    mods_with_files: usize,
-    total_files: usize,
-    total_size: u64,
+    all_stats: &ModStatistics,
     file_extension: &Option<String>,
-    archive_inspected_mods: usize,
-    archive_inspected_mods_with_files: usize,
-    archive_inspected_total_files: usize,
-    archive_inspected_total_size: u64,
-    filtered_mods: usize,
-    filtered_mods_with_files: usize,
-    filtered_total_files: usize,
-    filtered_total_size: u64,
+    archive_inspected_stats: &ModStatistics,
+    filtered_stats: &ModStatistics,
 ) {
     println!("\n📊 SUMMARY");
     println!("═══════════════════════════════════════");
@@ -615,67 +612,72 @@ fn print_summary(
 
     if let Some(ext) = file_extension {
         println!("🔍 File extension filter: .{ext}");
-        println!("✅ Mods matching filter: {filtered_mods}");
+        println!("✅ Mods matching filter: {}", filtered_stats.total_mods);
     }
 
     println!("\n📋 ALL MODS STATISTICS");
     println!("─────────────────────────────────────");
-    println!("📁 Mods with files: {mods_with_files}");
-    println!("📄 Total files: {total_files}");
+    println!("📁 Mods with files: {}", all_stats.mods_with_files);
+    println!("📄 Total files: {}", all_stats.total_files);
     println!(
         "💾 Combined size: {}",
-        ByteSizeString::from_u64(total_size).format_bytes()
+        ByteSizeString::from_u64(all_stats.total_size).format_bytes()
     );
     println!(
         "📈 Average mod size: {}",
-        if mods_with_files > 0 {
-            ByteSizeString::from_u64(total_size / mods_with_files as u64).format_bytes()
-        } else {
-            "N/A".to_string()
+        match all_stats.average_mod_size() {
+            Some(avg) => ByteSizeString::from_u64(avg).format_bytes(),
+            None => "N/A".to_string(),
         }
     );
 
     // Show archive inspection statistics if a filter was applied
-    if file_extension.is_some() && archive_inspected_mods > 0 {
+    if file_extension.is_some() && archive_inspected_stats.total_mods > 0 {
         println!("\n🔍 ARCHIVE INSPECTED STATISTICS");
         println!("─────────────────────────────────────");
-        println!("📁 Mods with archive contents inspected: {archive_inspected_mods}");
-        println!("📁 Archive inspected mods with files: {archive_inspected_mods_with_files}");
-        println!("📄 Archive inspected total files: {archive_inspected_total_files}");
+        println!(
+            "📁 Mods with archive contents inspected: {}",
+            archive_inspected_stats.total_mods
+        );
+        println!(
+            "📁 Archive inspected mods with files: {}",
+            archive_inspected_stats.mods_with_files
+        );
+        println!(
+            "📄 Archive inspected total files: {}",
+            archive_inspected_stats.total_files
+        );
         println!(
             "💾 Archive inspected combined size: {}",
-            ByteSizeString::from_u64(archive_inspected_total_size).format_bytes()
+            ByteSizeString::from_u64(archive_inspected_stats.total_size).format_bytes()
         );
         println!(
             "📈 Archive inspected average mod size: {}",
-            if archive_inspected_mods_with_files > 0 {
-                ByteSizeString::from_u64(
-                    archive_inspected_total_size / archive_inspected_mods_with_files as u64,
-                )
-                .format_bytes()
-            } else {
-                "N/A".to_string()
+            match archive_inspected_stats.average_mod_size() {
+                Some(avg) => ByteSizeString::from_u64(avg).format_bytes(),
+                None => "N/A".to_string(),
             }
         );
     }
 
     // Show filtered statistics if a filter was applied
-    if file_extension.is_some() && filtered_mods > 0 {
+    if file_extension.is_some() && filtered_stats.total_mods > 0 {
         println!("\n🎯 FILTERED MODS STATISTICS");
         println!("─────────────────────────────────────");
-        println!("📁 Filtered mods with files: {filtered_mods_with_files}");
-        println!("📄 Filtered total files: {filtered_total_files}");
+        println!(
+            "📁 Filtered mods with files: {}",
+            filtered_stats.mods_with_files
+        );
+        println!("📄 Filtered total files: {}", filtered_stats.total_files);
         println!(
             "💾 Filtered combined size: {}",
-            ByteSizeString::from_u64(filtered_total_size).format_bytes()
+            ByteSizeString::from_u64(filtered_stats.total_size).format_bytes()
         );
         println!(
             "📈 Filtered average mod size: {}",
-            if filtered_mods_with_files > 0 {
-                ByteSizeString::from_u64(filtered_total_size / filtered_mods_with_files as u64)
-                    .format_bytes()
-            } else {
-                "N/A".to_string()
+            match filtered_stats.average_mod_size() {
+                Some(avg) => ByteSizeString::from_u64(avg).format_bytes(),
+                None => "N/A".to_string(),
             }
         );
     }
