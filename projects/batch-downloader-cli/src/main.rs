@@ -80,9 +80,9 @@ async fn handle_mod_sizes(
     println!("🎮 Analyzing mods for game ID: {game_id} in category: '{category}'");
     println!("📊 Getting first {count} popular mods...\n");
 
-    // Get popular mods in batches (go for 1000 per request for safety)
+    // Get popular mods in batches (API allows 80 max per request [undocumented])
     let mut all_mods = Vec::new();
-    let batch_size = 300;
+    let batch_size = 80;
     let mut offset = 0;
 
     while all_mods.len() < count as usize {
