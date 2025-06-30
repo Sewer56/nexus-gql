@@ -20,6 +20,32 @@
 //! - May be slower than basic file analysis due to additional API calls
 //!
 //! Example: `--file-extension dds` will only include mods that contain .dds texture files.
+//!
+//! ### Sample Output with File Extension Filter
+//!
+//! ```text
+//! 📊 SUMMARY
+//! ═══════════════════════════════════════
+//! 🎮 Game: skyrimspecialedition (ID: 1704)
+//! 📂 Category: Models and Textures
+//! 📊 Total mods analyzed: 100
+//! 🔍 File extension filter: .dds
+//! ✅ Mods matching filter: 85
+//!
+//! 📋 ALL MODS STATISTICS
+//! ─────────────────────────────────────
+//! 📁 Mods with files: 95
+//! 📄 Total files: 450
+//! 💾 Combined size: 2.5 GiB
+//! 📈 Average mod size: 26.9 MiB
+//!
+//! 🎯 FILTERED MODS STATISTICS
+//! ─────────────────────────────────────
+//! 📁 Filtered mods with files: 85
+//! 📄 Filtered total files: 390
+//! 💾 Filtered combined size: 2.2 GiB
+//! 📈 Filtered average mod size: 26.5 MiB
+//! ```
 
 use clap::{Parser, Subcommand};
 use futures::{stream, StreamExt};
@@ -225,14 +251,24 @@ async fn handle_mod_sizes(
     let mut total_files = 0;
     let mut filtered_mods = 0;
 
+    // Statistics for filtered mods only
+    let mut filtered_total_size = 0u64;
+    let mut filtered_mods_with_files = 0;
+    let mut filtered_total_files = 0;
+
     for result in results {
         mods_with_files += result.mods_with_files;
         total_files += result.total_files;
         total_size += result.total_size;
 
-        // Count mods that matched the filter (if any)
+        // Track stats for mods that matched the filter
         if result.matched_filter {
             filtered_mods += 1;
+            if result.mods_with_files > 0 {
+                filtered_mods_with_files += result.mods_with_files;
+                filtered_total_files += result.total_files;
+                filtered_total_size += result.total_size;
+            }
         }
     }
 
@@ -246,6 +282,9 @@ async fn handle_mod_sizes(
         total_size,
         &file_extension,
         filtered_mods,
+        filtered_mods_with_files,
+        filtered_total_files,
+        filtered_total_size,
     );
 
     Ok(())
@@ -471,6 +510,9 @@ fn print_summary(
     total_size: u64,
     file_extension: &Option<String>,
     filtered_mods: usize,
+    filtered_mods_with_files: usize,
+    filtered_total_files: usize,
+    filtered_total_size: u64,
 ) {
     println!("\n📊 SUMMARY");
     println!("═══════════════════════════════════════");
@@ -483,6 +525,8 @@ fn print_summary(
         println!("✅ Mods matching filter: {filtered_mods}");
     }
 
+    println!("\n📋 ALL MODS STATISTICS");
+    println!("─────────────────────────────────────");
     println!("📁 Mods with files: {mods_with_files}");
     println!("📄 Total files: {total_files}");
     println!(
@@ -497,6 +541,27 @@ fn print_summary(
             "N/A".to_string()
         }
     );
+
+    // Show filtered statistics if a filter was applied
+    if file_extension.is_some() && filtered_mods > 0 {
+        println!("\n🎯 FILTERED MODS STATISTICS");
+        println!("─────────────────────────────────────");
+        println!("📁 Filtered mods with files: {filtered_mods_with_files}");
+        println!("📄 Filtered total files: {filtered_total_files}");
+        println!(
+            "💾 Filtered combined size: {}",
+            ByteSizeString::from_u64(filtered_total_size).format_bytes()
+        );
+        println!(
+            "📈 Filtered average mod size: {}",
+            if filtered_mods_with_files > 0 {
+                ByteSizeString::from_u64(filtered_total_size / filtered_mods_with_files as u64)
+                    .format_bytes()
+            } else {
+                "N/A".to_string()
+            }
+        );
+    }
 }
 
 async fn resolve_game_id(
