@@ -30,6 +30,10 @@ enum Commands {
         #[arg(short = 'n', long, default_value = "1000")]
         count: i64,
 
+        /// Only include main files when calculating sizes
+        #[arg(long)]
+        main_files_only: bool,
+
         /// Optional API key for authenticated requests (can also be set via NEXUS_API_KEY environment variable)
         #[arg(long)]
         api_key: Option<String>,
@@ -45,9 +49,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             game,
             category,
             count,
+            main_files_only,
             api_key,
         } => {
-            handle_mod_sizes(game, category, count, api_key).await?;
+            handle_mod_sizes(game, category, count, main_files_only, api_key).await?;
         }
     }
 
@@ -58,6 +63,7 @@ async fn handle_mod_sizes(
     game: String,
     category: String,
     count: i64,
+    main_files_only: bool,
     cli_api_key: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Get API key from CLI argument or environment variable
@@ -138,16 +144,25 @@ async fn handle_mod_sizes(
 
         match client.execute::<GetModFiles>(variables).await {
             Ok(files_response) => {
-                let mod_size: u64 = files_response
-                    .mod_files
+                let filtered_files = if main_files_only {
+                    files_response
+                        .mod_files
+                        .iter()
+                        .filter(|file| file.category == crate::get_mod_files::ModFileCategory::MAIN)
+                        .collect::<Vec<_>>()
+                } else {
+                    files_response.mod_files.iter().collect::<Vec<_>>()
+                };
+
+                let mod_size: u64 = filtered_files
                     .iter()
                     .filter_map(|file| file.size_in_bytes.as_ref())
                     .map(|size| size.bytes())
                     .sum();
 
-                if !files_response.mod_files.is_empty() {
+                if !filtered_files.is_empty() {
                     mods_with_files += 1;
-                    total_files += files_response.mod_files.len();
+                    total_files += filtered_files.len();
                     total_size += mod_size;
 
                     let size_str = if mod_size > 0 {
@@ -156,13 +171,25 @@ async fn handle_mod_sizes(
                         "Unknown size".to_string()
                     };
 
+                    let filter_info = if main_files_only {
+                        " (main files only)"
+                    } else {
+                        ""
+                    };
+
                     println!(
-                        "{} files, {} total",
-                        files_response.mod_files.len(),
+                        "{} files{}, {} total",
+                        filtered_files.len(),
+                        filter_info,
                         size_str
                     );
                 } else {
-                    println!("No files found");
+                    let no_files_msg = if main_files_only {
+                        "No main files found"
+                    } else {
+                        "No files found"
+                    };
+                    println!("{no_files_msg}");
                 }
             }
             Err(e) => {
