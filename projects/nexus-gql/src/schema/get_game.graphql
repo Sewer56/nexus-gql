@@ -1,0 +1,7 @@
+query GetGame($domainName: String!) {
+  game(domainName: $domainName) {
+    id
+    name
+    domainName
+  }
+} 

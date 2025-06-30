@@ -2,7 +2,7 @@ use graphql_client::GraphQLQuery;
 
 // Custom scalar types
 type DateTime = chrono::DateTime<chrono::Utc>;
-type BigInt = String; // API returns BigInt as strings, not numbers
+type BigInt = crate::types::ByteSizeString; // Deserialize BigInt string as ByteSize
 
 // Generate GraphQL queries from schema.json and query files
 #[derive(GraphQLQuery)]
@@ -20,6 +20,14 @@ pub struct GetPopularModsForGameAndCategoryByEndorsementsDescending;
     response_derives = "Debug,Clone,PartialEq"
 )]
 pub struct GetModFiles;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "src/schema/schema.json",
+    query_path = "src/schema/get_game.graphql",
+    response_derives = "Debug,Clone,PartialEq"
+)]
+pub struct GetGame;
 
 #[cfg(test)]
 mod tests {
@@ -49,5 +57,14 @@ mod tests {
         };
 
         let _query = GetModFiles::build_query(variables);
+    }
+
+    #[test]
+    fn get_game_query_generation() {
+        let variables = get_game::Variables {
+            domain_name: "skyrimspecialedition".to_string(),
+        };
+
+        let _query = GetGame::build_query(variables);
     }
 }

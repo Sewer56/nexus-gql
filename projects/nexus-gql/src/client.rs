@@ -117,8 +117,8 @@ impl Default for NexusClient {
 mod tests {
     use super::*;
     use crate::{
-        get_mod_files, get_popular_mods_for_game_and_category_by_endorsements_descending,
-        GetModFiles, GetPopularModsForGameAndCategoryByEndorsementsDescending,
+        get_game, get_mod_files, get_popular_mods_for_game_and_category_by_endorsements_descending,
+        GetGame, GetModFiles, GetPopularModsForGameAndCategoryByEndorsementsDescending,
     };
 
     /// Helper method to execute a query and handle common error cases
@@ -161,6 +161,30 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn get_game_integration() {
+        // Create client (this test can work without API key for public data)
+        let client = NexusClient::new();
+
+        // Test variables for Skyrim Special Edition domain
+        let variables = get_game::Variables {
+            domain_name: "skyrimspecialedition".to_string(),
+        };
+
+        execute_query_with_error_handling::<GetGame, _>(&client, variables, |data| {
+            if let Some(game) = data.game {
+                println!("✅ Successfully retrieved game information");
+                println!(
+                    "Game: {} (ID: {}, Domain: {})",
+                    game.name, game.id, game.domain_name
+                );
+            } else {
+                println!("⚠️ No game found for domain 'skyrimspecialedition'");
+            }
+        })
+        .await;
     }
 
     #[tokio::test]
@@ -211,10 +235,14 @@ mod tests {
             if !data.mod_files.is_empty() {
                 let first_file = &data.mod_files[0];
                 println!(
-                    "First file: {} (ID: {}, Size: {} bytes)",
+                    "First file: {} (ID: {}, Size: {})",
                     first_file.name,
                     first_file.file_id,
-                    first_file.size_in_bytes.as_deref().unwrap_or("unknown")
+                    first_file
+                        .size_in_bytes
+                        .as_ref()
+                        .map(|s| s.format_bytes())
+                        .unwrap_or_else(|| "unknown".to_string())
                 );
             }
         })

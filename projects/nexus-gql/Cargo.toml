@@ -2,7 +2,7 @@
 name = "nexus-gql"
 version = "0.1.0"
 edition = "2021"
-description = "Batch downloader from Nexus Mods, using GraphQL API."
+description = "GraphQL API for Nexus Mods. Built for my own batch downloader (research purposes)."
 repository = "https://github.com/Sewer56/nexus-gql"
 license-file = "../../LICENSE"
 include = ["src/**/*"]
@@ -22,8 +22,8 @@ reqwest = { version = "0.12", features = ["json"] }
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
 
-# Large integer support
-num-bigint = { version = "0.4", features = ["serde"] }
+# Byte size handling
+bytesize = "2.0.1"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
