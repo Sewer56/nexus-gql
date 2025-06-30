@@ -5,10 +5,19 @@
 //! ## Features
 //!
 //! - **Mod Size Analysis**: Calculate total size of mods in a category
+//! - **File Type Breakdown**: Detailed statistics for all file types found within archives
 //! - **File Extension Filtering**: Filter mods by file extensions within archives
 //! - **Archive Content Inspection**: Deep inspection of mod archive contents using the legacy REST API
 //! - **Concurrent Processing**: Configurable concurrency for faster analysis
 //! - **Authentication**: Support for authenticated requests via API key
+//!
+//! ## Archive Content Inspection
+//!
+//! The tool now always inspects archive contents to provide detailed file type breakdowns. This means:
+//! - Every mod's archive contents are analyzed for comprehensive statistics
+//! - File type breakdown shows total size, count, and average size for each extension
+//! - Processing is slower compared to basic file analysis due to additional API calls
+//! - Results provide much more detailed insights into mod compositions
 //!
 //! ## File Extension Filtering
 //!
@@ -35,34 +44,44 @@
 //!
 //! ```text
 //! 📊 SUMMARY
-//! ═══════════════════════════════════════
-//! 🎮 Game: skyrimspecialedition (ID: 1704)
-//! 📂 Category: Models and Textures
-//! 📊 Total mods analyzed: 100
-//! 🔍 File extension filter: .dds
-//! ✅ Mods matching filter: 85
+//!═══════════════════════════════════════
+//!🎮 Game: skyrimspecialedition (ID: 1704)
+//!📂 Category:
+//!📊 Total mods analyzed: 100
+//!🔍 File extension filter: .dds
+//!✅ Mods matching filter: 30
 //!
-//! 📋 ALL MODS STATISTICS
-//! ─────────────────────────────────────
-//! 📁 Mods with files: 95
-//! 📄 Total files: 450
-//! 💾 Combined size: 2.5 GiB
-//! 📈 Average mod size: 26.9 MiB
+//!📋 ALL MODS STATISTICS
+//!─────────────────────────────────────
+//!📁 Mods with files: 100
+//!📄 Total files: 149
+//!💾 Combined size: 52.4 GiB
+//!📈 Average mod size: 536.3 MiB
 //!
-//! 🔍 ARCHIVE INSPECTED STATISTICS
-//! ─────────────────────────────────────
-//! 📁 Mods with archive contents inspected: 90
-//! 📁 Archive inspected mods with files: 90
-//! 📄 Archive inspected total files: 420
-//! 💾 Archive inspected combined size: 2.4 GiB
-//! 📈 Archive inspected average mod size: 27.2 MiB
+//!🔍 ARCHIVE INSPECTED STATISTICS
+//!─────────────────────────────────────
+//!📁 Mods with archive contents inspected: 99
+//!📁 Archive inspected mods with files: 99
+//!📄 Archive inspected total files: 148
+//!💾 Archive inspected combined size: 52.2 GiB
+//!📈 Archive inspected average mod size: 540.3 MiB
 //!
-//! 🎯 FILTERED MODS STATISTICS
-//! ─────────────────────────────────────
-//! 📁 Filtered mods with files: 85
-//! 📄 Filtered total files: 390
-//! 💾 Filtered combined size: 2.2 GiB
-//! 📈 Filtered average mod size: 26.5 MiB
+//!🎯 FILTERED MODS STATISTICS
+//!─────────────────────────────────────
+//!📁 Filtered mods with files: 30
+//!📄 Filtered total files: 48
+//!💾 Filtered combined size: 16.5 GiB
+//!📈 Filtered average mod size: 562.4 MiB
+//!
+//!📄 FILE TYPE BREAKDOWN
+//!══════════════════════════════════════════════════════════════════
+//!Extension  Item Count      Total Size      Average Size   
+//!──────────────────────────────────────────────────────────────────
+//!.dds       17974           64.4 GiB        3.7 MiB        
+//!.bsa       68              13.5 GiB        203.3 MiB      
+//!.nif       16369           9.6 GiB         611.8 KiB      
+//!.tri       3072            1.8 GiB         609.5 KiB      
+//!.pdb       69              1.7 GiB         25.8 MiB    
 //! ```
 
 use clap::{Parser, Subcommand};
@@ -73,6 +92,7 @@ use nexus_gql::{
     GetPopularModsForGameAndCategoryByEndorsementsDescending, NexusClient,
 };
 use std::{
+    collections::HashMap,
     env,
     sync::atomic::{AtomicUsize, Ordering},
     sync::Arc,
@@ -125,8 +145,42 @@ pub struct ModProcessingResult {
     pub total_size: u64,
     /// Whether this mod matched the extension filter (if any)
     pub matched_filter: bool,
-    /// Whether we successfully obtained archive contents for this mod (only relevant when file_extension filter is used)
+    /// Whether we successfully obtained archive contents for this mod
     pub archive_inspected: bool,
+    /// File extension statistics from archive contents
+    pub file_extension_stats: FileExtensionStatistics,
+}
+
+/// Statistics for file extensions
+#[derive(Debug, Clone, Default)]
+pub struct FileExtensionStatistics {
+    /// Map of extension to (count, total_size)
+    pub extensions: HashMap<String, (usize, u64)>,
+}
+
+impl FileExtensionStatistics {
+    /// Add a file with the given extension and size
+    pub fn add_file(&mut self, extension: String, size: u64) {
+        let entry = self.extensions.entry(extension).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += size;
+    }
+
+    /// Merge another FileExtensionStatistics into this one
+    pub fn merge(&mut self, other: &FileExtensionStatistics) {
+        for (ext, (count, size)) in &other.extensions {
+            let entry = self.extensions.entry(ext.clone()).or_insert((0, 0));
+            entry.0 += count;
+            entry.1 += size;
+        }
+    }
+
+    /// Get sorted list of extensions by total size descending
+    pub fn sorted_by_size(&self) -> Vec<(&String, &(usize, u64))> {
+        let mut extensions: Vec<_> = self.extensions.iter().collect();
+        extensions.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        extensions
+    }
 }
 
 #[derive(Parser)]
@@ -315,6 +369,7 @@ async fn handle_mod_sizes(
     let mut all_stats = ModStatistics::default();
     let mut archive_inspected_stats = ModStatistics::default();
     let mut filtered_stats = ModStatistics::default();
+    let mut file_extension_stats = FileExtensionStatistics::default();
 
     for result in results {
         let has_files = result.mods_with_files > 0;
@@ -331,6 +386,9 @@ async fn handle_mod_sizes(
         if result.matched_filter {
             filtered_stats.add_mod(has_files, result.total_files, result.total_size);
         }
+
+        // File extension statistics
+        file_extension_stats.merge(&result.file_extension_stats);
     }
 
     print_summary(
@@ -342,6 +400,7 @@ async fn handle_mod_sizes(
         &file_extension,
         &archive_inspected_stats,
         &filtered_stats,
+        &file_extension_stats,
     );
 
     Ok(())
@@ -388,20 +447,16 @@ async fn process_mod_files(
                 .map(|size| size.bytes())
                 .sum();
 
-            // Check file extension filter if specified
-            let (matched_file_extension, archive_inspected) = if let Some(ext) = &file_extension {
-                // Need to check archive contents for each file to see if any contains the target extension
-                check_files_for_extension(
+            // Always get archive contents for file extension breakdown
+            let (matched_file_extension, archive_inspected, file_extension_stats) =
+                get_archive_contents_and_check_filter(
                     &client,
                     &mod_info,
                     &filtered_files,
-                    ext,
+                    file_extension.as_ref(),
                     use_risky_method,
                 )
-                .await
-            } else {
-                (true, false) // No filter means all match, but no archive inspection was done
-            };
+                .await;
 
             if !filtered_files.is_empty() {
                 print_mod_processing_success(
@@ -422,6 +477,7 @@ async fn process_mod_files(
                     total_size: mod_size,
                     matched_filter: matched_file_extension,
                     archive_inspected,
+                    file_extension_stats,
                 }
             } else {
                 print_mod_no_files(
@@ -439,6 +495,7 @@ async fn process_mod_files(
                     total_size: 0,
                     matched_filter: matched_file_extension,
                     archive_inspected,
+                    file_extension_stats,
                 }
             }
         }
@@ -457,26 +514,28 @@ async fn process_mod_files(
                 total_size: 0,
                 matched_filter: false,
                 archive_inspected: false,
+                file_extension_stats: FileExtensionStatistics::default(),
             }
         }
     }
 }
 
-/// Check if any of the mod files contain files with the specified extension
-/// Returns (matched_filter, archive_inspected) tuple
-async fn check_files_for_extension(
+/// Get archive contents and collect file extension statistics, also checking if filter matches
+/// Returns (matched_filter, archive_inspected, file_extension_stats) tuple
+async fn get_archive_contents_and_check_filter(
     client: &NexusClient,
     mod_info: &get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
     files: &[&get_mod_files::GetModFilesModFiles],
-    target_extension: &str,
+    target_extension: Option<&String>,
     use_risky_method: bool,
-) -> (bool, bool) {
+) -> (bool, bool, FileExtensionStatistics) {
     let game_domain = &mod_info.game.domain_name;
     let mod_id = &mod_info.mod_id.to_string();
     let game_id = &mod_info.game.id.to_string();
 
     let mut archive_inspected = false;
-    let mut matched_filter = false;
+    let mut matched_filter = true; // Default to true if no filter is specified
+    let mut file_extension_stats = FileExtensionStatistics::default();
 
     for file in files {
         let file_id = &file.file_id.to_string();
@@ -505,15 +564,25 @@ async fn check_files_for_extension(
             Ok(archive_contents) => {
                 archive_inspected = true;
 
-                // Check if any file in the archive has the target extension
-                let has_extension = archive_contents
-                    .files
-                    .iter()
-                    .any(|archive_file| archive_file.extension() == Some(target_extension));
+                // Collect file extension statistics
+                for archive_file in &archive_contents.files {
+                    if let Some(extension) = archive_file.extension() {
+                        // Use the size from archive file
+                        let file_size = archive_file.size;
+                        file_extension_stats.add_file(extension.to_string(), file_size);
+                    }
+                }
 
-                if has_extension {
-                    matched_filter = true;
-                    return (matched_filter, archive_inspected);
+                // Check if any file in the archive has the target extension (if filter is specified)
+                if let Some(target_ext) = target_extension {
+                    let has_extension = archive_contents
+                        .files
+                        .iter()
+                        .any(|archive_file| archive_file.extension() == Some(target_ext));
+
+                    if !has_extension {
+                        matched_filter = false;
+                    }
                 }
             }
             Err(_) => {
@@ -524,7 +593,12 @@ async fn check_files_for_extension(
         }
     }
 
-    (matched_filter, archive_inspected)
+    // If we have a filter but no archives were inspected, consider it not matched
+    if target_extension.is_some() && !archive_inspected {
+        matched_filter = false;
+    }
+
+    (matched_filter, archive_inspected, file_extension_stats)
 }
 
 /// Print successful mod processing result
@@ -603,6 +677,7 @@ fn print_summary(
     file_extension: &Option<String>,
     archive_inspected_stats: &ModStatistics,
     filtered_stats: &ModStatistics,
+    file_extension_stats: &FileExtensionStatistics,
 ) {
     println!("\n📊 SUMMARY");
     println!("═══════════════════════════════════════");
@@ -680,6 +755,34 @@ fn print_summary(
                 None => "N/A".to_string(),
             }
         );
+    }
+
+    // Show file type breakdown
+    if !file_extension_stats.extensions.is_empty() {
+        println!("\n📄 FILE TYPE BREAKDOWN (Top 10)");
+        println!("══════════════════════════════════════════════════════════════════");
+        println!(
+            "{:<10} {:<15} {:<15} {:<15}",
+            "Extension", "Item Count", "Total Size", "Average Size"
+        );
+        println!("──────────────────────────────────────────────────────────────────");
+
+        for (extension, (count, total_size)) in
+            file_extension_stats.sorted_by_size().iter().take(10)
+        {
+            let average_size = if *count > 0 {
+                *total_size / *count as u64
+            } else {
+                0
+            };
+            println!(
+                "{:<10} {:<15} {:<15} {:<15}",
+                format!(".{}", extension),
+                count,
+                ByteSizeString::from_u64(*total_size).format_bytes(),
+                ByteSizeString::from_u64(average_size).format_bytes()
+            );
+        }
     }
 }
 
