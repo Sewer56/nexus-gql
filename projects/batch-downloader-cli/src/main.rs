@@ -1,3 +1,26 @@
+//! # Batch Downloader CLI
+//!
+//! Command-line interface for batch downloading and analyzing mods from Nexus Mods using the GraphQL API.
+//!
+//! ## Features
+//!
+//! - **Mod Size Analysis**: Calculate total size of mods in a category
+//! - **File Extension Filtering**: Filter mods by file extensions within archives
+//! - **Archive Content Inspection**: Deep inspection of mod archive contents using the legacy REST API
+//! - **Concurrent Processing**: Configurable concurrency for faster analysis
+//! - **Authentication**: Support for authenticated requests via API key
+//!
+//! ## File Extension Filtering
+//!
+//! The `--file-extension` option enables filtering mods based on files contained within their archives.
+//! This feature:
+//! - Uses the `get_mod_file_contents` method to inspect archive contents
+//! - Returns only mods where at least one archive contains a file with the specified extension
+//! - Requires an API key for archive content inspection
+//! - May be slower than basic file analysis due to additional API calls
+//!
+//! Example: `--file-extension dds` will only include mods that contain .dds texture files.
+
 use clap::{Parser, Subcommand};
 use futures::{stream, StreamExt};
 use nexus_gql::{
@@ -10,6 +33,21 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     sync::Arc,
 };
+
+/// Result of processing a single mod's files
+#[derive(Debug, Clone)]
+pub struct ModProcessingResult {
+    /// The mod information
+    pub mod_info: get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
+    /// Number of mods with files (0 or 1 for individual mods)
+    pub mods_with_files: usize,
+    /// Total number of files processed
+    pub total_files: usize,
+    /// Total size of all files
+    pub total_size: u64,
+    /// Whether this mod matched the extension filter (if any)
+    pub matched_filter: bool,
+}
 
 #[derive(Parser)]
 #[command(name = "batch-downloader-cli")]
@@ -46,6 +84,11 @@ enum Commands {
         /// Optional API key for authenticated requests (can also be set via NEXUS_API_KEY environment variable)
         #[arg(long)]
         api_key: Option<String>,
+
+        /// Filter mods by file extension - only include mods that contain files with this extension
+        /// (e.g., "dds", "esp", "esm"). This requires archive content inspection and may be slower.
+        #[arg(long)]
+        file_extension: Option<String>,
     },
 }
 
@@ -61,8 +104,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             main_files_only,
             concurrency,
             api_key,
+            file_extension,
         } => {
-            handle_mod_sizes(game, category, count, main_files_only, concurrency, api_key).await?;
+            handle_mod_sizes(
+                game,
+                category,
+                count,
+                main_files_only,
+                concurrency,
+                api_key,
+                file_extension,
+            )
+            .await?;
         }
     }
 
@@ -76,6 +129,7 @@ async fn handle_mod_sizes(
     main_files_only: bool,
     concurrency: usize,
     cli_api_key: Option<String>,
+    file_extension: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Validate concurrency parameter
     let concurrency = if concurrency == 0 {
@@ -158,6 +212,7 @@ async fn handle_mod_sizes(
                 main_files_only,
                 Arc::clone(&completed_count),
                 total_mods,
+                file_extension.clone(),
             )
         })
         .buffer_unordered(concurrency)
@@ -168,11 +223,17 @@ async fn handle_mod_sizes(
     let mut total_size = 0u64;
     let mut mods_with_files = 0;
     let mut total_files = 0;
+    let mut filtered_mods = 0;
 
-    for (mods_count, files_count, size) in results {
-        mods_with_files += mods_count;
-        total_files += files_count;
-        total_size += size;
+    for result in results {
+        mods_with_files += result.mods_with_files;
+        total_files += result.total_files;
+        total_size += result.total_size;
+
+        // Count mods that matched the filter (if any)
+        if result.matched_filter {
+            filtered_mods += 1;
+        }
     }
 
     print_summary(
@@ -183,6 +244,8 @@ async fn handle_mod_sizes(
         mods_with_files,
         total_files,
         total_size,
+        &file_extension,
+        filtered_mods,
     );
 
     Ok(())
@@ -196,7 +259,8 @@ async fn process_mod_files(
     main_files_only: bool,
     completed_count: Arc<AtomicUsize>,
     total_mods: usize,
-) -> (usize, usize, u64) {
+    file_extension: Option<String>,
+) -> ModProcessingResult {
     // Get mod files
     let variables = get_mod_files::Variables {
         mod_id: mod_info.mod_id.to_string(),
@@ -214,7 +278,7 @@ async fn process_mod_files(
                 files_response
                     .mod_files
                     .iter()
-                    .filter(|file| file.category == crate::get_mod_files::ModFileCategory::MAIN)
+                    .filter(|file| file.category == get_mod_files::ModFileCategory::MAIN)
                     .collect::<Vec<_>>()
             } else {
                 files_response.mod_files.iter().collect::<Vec<_>>()
@@ -226,7 +290,15 @@ async fn process_mod_files(
                 .map(|size| size.bytes())
                 .sum();
 
-            if !filtered_files.is_empty() {
+            // Check file extension filter if specified
+            let matched_filter = if let Some(ext) = &file_extension {
+                // Need to check archive contents for each file to see if any contains the target extension
+                check_files_for_extension(&client, &mod_info, &filtered_files, ext).await
+            } else {
+                true
+            };
+
+            if !filtered_files.is_empty() && (file_extension.is_none() || matched_filter) {
                 print_mod_processing_success(
                     completed,
                     total_mods,
@@ -235,9 +307,16 @@ async fn process_mod_files(
                     filtered_files.len(),
                     mod_size,
                     main_files_only,
+                    matched_filter,
                 );
 
-                (1, filtered_files.len(), mod_size) // (mods_with_files, total_files, total_size)
+                ModProcessingResult {
+                    mod_info: mod_info.clone(),
+                    mods_with_files: 1,
+                    total_files: filtered_files.len(),
+                    total_size: mod_size,
+                    matched_filter,
+                }
             } else {
                 print_mod_no_files(
                     completed,
@@ -247,7 +326,13 @@ async fn process_mod_files(
                     main_files_only,
                 );
 
-                (0, 0, 0)
+                ModProcessingResult {
+                    mod_info: mod_info.clone(),
+                    mods_with_files: 0,
+                    total_files: 0,
+                    total_size: 0,
+                    matched_filter,
+                }
             }
         }
         Err(e) => {
@@ -258,12 +343,59 @@ async fn process_mod_files(
                 &mod_info.mod_id.to_string(),
                 &e.to_string(),
             );
-            (0, 0, 0)
+            ModProcessingResult {
+                mod_info: mod_info.clone(),
+                mods_with_files: 0,
+                total_files: 0,
+                total_size: 0,
+                matched_filter: false,
+            }
         }
     }
 }
 
+/// Check if any of the mod files contain files with the specified extension
+async fn check_files_for_extension(
+    client: &NexusClient,
+    mod_info: &get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
+    files: &[&get_mod_files::GetModFilesModFiles],
+    target_extension: &str,
+) -> bool {
+    let game_domain = &mod_info.game.domain_name;
+    let mod_id = &mod_info.mod_id.to_string();
+
+    for file in files {
+        let file_id = &file.file_id.to_string();
+
+        // Try to get archive contents for this file
+        match client
+            .get_mod_file_contents(game_domain, mod_id, file_id)
+            .await
+        {
+            Ok(archive_contents) => {
+                // Check if any file in the archive has the target extension
+                let has_extension = archive_contents
+                    .files
+                    .iter()
+                    .any(|archive_file| archive_file.extension() == Some(target_extension));
+
+                if has_extension {
+                    return true;
+                }
+            }
+            Err(_) => {
+                // If we can't get archive contents, skip this file
+                // This might happen for files that don't have content preview available
+                continue;
+            }
+        }
+    }
+
+    false
+}
+
 /// Print successful mod processing result
+#[allow(clippy::too_many_arguments)]
 fn print_mod_processing_success(
     completed: usize,
     total_mods: usize,
@@ -272,6 +404,7 @@ fn print_mod_processing_success(
     file_count: usize,
     mod_size: u64,
     main_files_only: bool,
+    matched_filter: bool,
 ) {
     let size_str = if mod_size > 0 {
         ByteSizeString::from_u64(mod_size).format_bytes()
@@ -285,8 +418,14 @@ fn print_mod_processing_success(
         ""
     };
 
+    let filter_match_info = if matched_filter {
+        " (matched filter)"
+    } else {
+        ""
+    };
+
     println!(
-        "📁 [{completed:4}/{total_mods}] {mod_name} (ID: {mod_id}): {file_count} files{filter_info}, {size_str} total"
+        "📁 [{completed:4}/{total_mods}] {mod_name} (ID: {mod_id}): {file_count} files{filter_info}{filter_match_info}, {size_str} total"
     );
 }
 
@@ -321,6 +460,7 @@ fn print_mod_processing_error(
 }
 
 /// Print the summary of mod analysis results
+#[allow(clippy::too_many_arguments)]
 fn print_summary(
     game: &str,
     game_id: &str,
@@ -329,12 +469,20 @@ fn print_summary(
     mods_with_files: usize,
     total_files: usize,
     total_size: u64,
+    file_extension: &Option<String>,
+    filtered_mods: usize,
 ) {
     println!("\n📊 SUMMARY");
     println!("═══════════════════════════════════════");
     println!("🎮 Game: {game} (ID: {game_id})");
     println!("📂 Category: {category}");
     println!("📊 Total mods analyzed: {total_mods_analyzed}");
+
+    if let Some(ext) = file_extension {
+        println!("🔍 File extension filter: .{ext}");
+        println!("✅ Mods matching filter: {filtered_mods}");
+    }
+
     println!("📁 Mods with files: {mods_with_files}");
     println!("📄 Total files: {total_files}");
     println!(

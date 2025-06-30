@@ -8,7 +8,10 @@ extern crate std;
 pub use client::{NexusClient, NexusConfig};
 pub use errors::{NexusError, Result};
 pub use queries::*;
-pub use types::{ByteSizeString, DownloadLink};
+pub use types::{
+    ArchiveContents, ArchiveFile, ArchiveFilePath, ByteSizeString, DownloadLink, EntryType,
+    FileMetadata, FileTreeEntry, FileTreeResponse,
+};
 
 // Core modules
 pub mod client;

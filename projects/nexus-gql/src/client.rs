@@ -181,6 +181,94 @@ impl NexusClient {
         let links: Vec<crate::types::DownloadLink> = response.json().await?;
         Ok(links)
     }
+
+    /// Get the contents/file list of a mod archive using the legacy REST API
+    ///
+    /// This method requires authentication via API key. It first fetches file metadata
+    /// to get the content preview link, then fetches the actual file structure.
+    ///
+    /// # Arguments
+    ///
+    /// * `game_domain` - The game domain name (e.g., "skyrimspecialedition")
+    /// * `mod_id` - The mod ID
+    /// * `file_id` - The file ID
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use nexus_gql::NexusClient;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = NexusClient::new().with_api_key("your_api_key".to_string());
+    /// let contents = client.get_mod_file_contents("skyrimspecialedition", "659", "4639").await?;
+    ///
+    /// println!("Archive contains {} files", contents.file_count());
+    /// for file in &contents.files {
+    ///     println!("  {}", file.path);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_mod_file_contents(
+        &self,
+        game_domain: &str,
+        mod_id: &str,
+        file_id: &str,
+    ) -> Result<crate::types::ArchiveContents> {
+        if self.config.api_key.is_none() {
+            return Err(NexusError::config(
+                "API key is required for mod file contents. Use .with_api_key() to set it.",
+            ));
+        }
+
+        let url = format!(
+            "{}/games/{}/mods/{}/files/{}.json",
+            self.config.legacy_api_url, game_domain, mod_id, file_id
+        );
+
+        // Add API key header
+        let mut request = self.client.get(&url);
+        if let Some(ref api_key) = self.config.api_key {
+            request = request.header("apikey", api_key);
+        }
+
+        // First request: Get file metadata with content_preview_link
+        let metadata_response = request.send().await?;
+
+        if !metadata_response.status().is_success() {
+            let status = metadata_response.status();
+            let text = metadata_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(NexusError::http_error(format!("HTTP {status}: {text}")));
+        }
+
+        let metadata: crate::types::FileMetadata = metadata_response.json().await?;
+
+        // Second request: Get actual file structure from content_preview_link
+        let tree_response = self
+            .client
+            .get(&metadata.content_preview_link)
+            .send()
+            .await?;
+
+        if !tree_response.status().is_success() {
+            let status = tree_response.status();
+            let text = tree_response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(NexusError::http_error(format!(
+                "HTTP {status} from content preview: {text}"
+            )));
+        }
+
+        let file_tree: crate::types::FileTreeResponse = tree_response.json().await?;
+
+        // Convert tree structure to flat file list
+        Ok(file_tree.to_archive_contents())
+    }
 }
 
 impl Default for NexusClient {
@@ -396,7 +484,89 @@ mod tests {
                 println!("✅ Correctly rejected request without API key");
             }
             Ok(_) => panic!("Should have failed without API key"),
-            Err(e) => panic!("Unexpected error type: {}", e),
+            Err(e) => panic!("Unexpected error type: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn mod_file_contents_integration() {
+        // This test requires an API key from environment variable
+        let api_key = std::env::var("NEXUS_API_KEY").ok();
+
+        if api_key.is_none() {
+            println!(
+                "⚠️ Skipping mod file contents test - NEXUS_API_KEY environment variable not set"
+            );
+            println!("   Set NEXUS_API_KEY=your_api_key to run this test");
+            return;
+        }
+
+        let client = NexusClient::new().with_api_key(api_key.unwrap());
+
+        // Test getting archive contents for SMIM main file in Skyrim Special Edition
+        let result = client
+            .get_mod_file_contents("skyrimspecialedition", "659", "4639")
+            .await;
+
+        match result {
+            Ok(contents) => {
+                println!("✅ Successfully retrieved archive contents");
+                println!(
+                    "  Archive contains {} files ({})",
+                    contents.file_count(),
+                    contents.format_total_size()
+                );
+
+                // Print first few files as examples
+                for (i, file) in contents.files.iter().take(5).enumerate() {
+                    println!("  {}: {}", i + 1, file);
+                }
+
+                if contents.files.len() > 5 {
+                    println!("  ... and {} more files", contents.files.len() - 5);
+                }
+
+                assert!(contents.file_count() > 0, "Should have at least one file");
+                assert!(
+                    contents.total_size() > 0,
+                    "Total size should be greater than 0"
+                );
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                println!("❌ Mod file contents test failed: {error_msg}");
+
+                if error_msg.contains("404") {
+                    println!(
+                        "💡 File not found - this is expected if the test file ID is outdated"
+                    );
+                } else if error_msg.contains("403") || error_msg.contains("401") {
+                    println!("💡 Authentication error - check your API key permissions");
+                } else if error_msg.contains("network") || error_msg.contains("DNS") {
+                    println!("⚠️ Network error (expected in CI): {error_msg}");
+                } else {
+                    // Only assert for unexpected error types
+                    panic!("Unexpected error type: {error_msg}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn mod_file_contents_requires_api_key() {
+        let client = NexusClient::new(); // No API key
+
+        let result = client
+            .get_mod_file_contents("skyrimspecialedition", "659", "1679")
+            .await;
+
+        match result {
+            Err(NexusError::Config(msg)) => {
+                assert!(msg.contains("API key is required"));
+                println!("✅ Correctly rejected mod file contents request without API key");
+            }
+            Ok(_) => panic!("Should have failed without API key"),
+            Err(e) => panic!("Unexpected error type: {e}"),
         }
     }
 }
