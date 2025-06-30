@@ -25,6 +25,10 @@ pub enum NexusError {
     /// Invalid configuration
     #[error("Invalid configuration: {0}")]
     Config(String),
+
+    /// HTTP error with custom message
+    #[error("HTTP error: {0}")]
+    HttpError(String),
 }
 
 impl NexusError {
@@ -36,5 +40,10 @@ impl NexusError {
     /// Create a new configuration error
     pub fn config<S: Into<String>>(message: S) -> Self {
         Self::Config(message.into())
+    }
+
+    /// Create a new HTTP error
+    pub fn http_error<S: Into<String>>(message: S) -> Self {
+        Self::HttpError(message.into())
     }
 }

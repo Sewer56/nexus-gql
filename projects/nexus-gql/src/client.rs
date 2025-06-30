@@ -9,6 +9,8 @@ use crate::errors::{NexusError, Result};
 pub struct NexusConfig {
     /// Base URL for the GraphQL API
     pub api_url: String,
+    /// Base URL for the legacy REST API
+    pub legacy_api_url: String,
     /// Optional API key for authenticated requests
     pub api_key: Option<String>,
     /// User agent string for requests
@@ -19,6 +21,7 @@ impl Default for NexusConfig {
     fn default() -> Self {
         Self {
             api_url: "https://api.nexusmods.com/v2/graphql".to_string(),
+            legacy_api_url: "https://api.nexusmods.com/v1".to_string(),
             api_key: None,
             user_agent:
                 "sewer-is-downloading-a-lot-of-textures-dont-mind-me-its-for-research/0.1.0"
@@ -104,6 +107,71 @@ impl NexusClient {
         }
 
         response_body.data.ok_or(NexusError::NoData)
+    }
+
+    /// Get download links for a file using the legacy REST API
+    ///
+    /// This method requires authentication via API key. For premium users, this will return
+    /// direct download links. For free users, you may need additional parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `game_domain` - The game domain name (e.g., "skyrimspecialedition")
+    /// * `mod_id` - The mod ID
+    /// * `file_id` - The file ID
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use nexus_gql::NexusClient;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let client = NexusClient::new().with_api_key("your_api_key".to_string());
+    /// let links = client.download_links("skyrimspecialedition", "659", "1234").await?;
+    ///
+    /// for link in &links {
+    ///     println!("Mirror: {} - URL: {}", link.short_name, link.uri);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn download_links(
+        &self,
+        game_domain: &str,
+        mod_id: &str,
+        file_id: &str,
+    ) -> Result<Vec<crate::types::DownloadLink>> {
+        if self.config.api_key.is_none() {
+            return Err(NexusError::config(
+                "API key is required for download links. Use .with_api_key() to set it.",
+            ));
+        }
+
+        let url = format!(
+            "{}/games/{}/mods/{}/files/{}/download_link.json",
+            self.config.legacy_api_url, game_domain, mod_id, file_id
+        );
+
+        let mut request = self.client.get(&url);
+
+        // Add API key header
+        if let Some(ref api_key) = self.config.api_key {
+            request = request.header("apikey", api_key);
+        }
+
+        let response = request.send().await?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(NexusError::http_error(format!("HTTP {status}: {text}")));
+        }
+
+        let links: Vec<crate::types::DownloadLink> = response.json().await?;
+        Ok(links)
     }
 }
 
@@ -235,8 +303,9 @@ mod tests {
             if !data.mod_files.is_empty() {
                 let first_file = &data.mod_files[0];
                 println!(
-                    "First file: {} (ID: {}, Size: {})",
+                    "First file: {} (ModID: {}, FileID: {}, Size: {})",
                     first_file.name,
+                    first_file.mod_id,
                     first_file.file_id,
                     first_file
                         .size_in_bytes
@@ -247,5 +316,79 @@ mod tests {
             }
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn download_links_integration() {
+        // This test requires an API key from environment variable
+        let api_key = std::env::var("NEXUS_API_KEY").ok();
+
+        if api_key.is_none() {
+            println!(
+                "⚠️ Skipping download links test - NEXUS_API_KEY environment variable not set"
+            );
+            println!("   Set NEXUS_API_KEY=your_api_key to run this test");
+            return;
+        }
+
+        let client = NexusClient::new().with_api_key(api_key.unwrap());
+
+        // Test download links for SMIM main file in Skyrim Special Edition
+        let result = client
+            .download_links("skyrimspecialedition", "659", "4639")
+            .await;
+
+        match result {
+            Ok(links) => {
+                println!("✅ Successfully retrieved {} download links", links.len());
+                for link in &links {
+                    println!(
+                        "  Mirror: {} - URL: {}",
+                        link.short_name,
+                        if link.uri.len() > 50 {
+                            format!("{}...", &link.uri[..50])
+                        } else {
+                            link.uri.clone()
+                        }
+                    );
+                }
+                assert!(!links.is_empty(), "Should have at least one download link");
+            }
+            Err(e) => {
+                let error_msg = e.to_string();
+                println!("❌ Download links test failed: {error_msg}");
+
+                if error_msg.contains("404") {
+                    println!(
+                        "💡 File not found - this is expected if the test file ID is outdated"
+                    );
+                } else if error_msg.contains("403") || error_msg.contains("401") {
+                    println!("💡 Authentication error - check your API key permissions");
+                } else if error_msg.contains("network") || error_msg.contains("DNS") {
+                    println!("⚠️ Network error (expected in CI): {error_msg}");
+                } else {
+                    // Only assert for unexpected error types
+                    panic!("Unexpected error type: {error_msg}");
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn download_links_requires_api_key() {
+        let client = NexusClient::new(); // No API key
+
+        let result = client
+            .download_links("skyrimspecialedition", "659", "1679")
+            .await;
+
+        match result {
+            Err(NexusError::Config(msg)) => {
+                assert!(msg.contains("API key is required"));
+                println!("✅ Correctly rejected request without API key");
+            }
+            Ok(_) => panic!("Should have failed without API key"),
+            Err(e) => panic!("Unexpected error type: {}", e),
+        }
     }
 }

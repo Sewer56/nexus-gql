@@ -61,6 +61,43 @@ impl ByteSizeString {
     }
 }
 
+/// Download link information from the legacy REST API
+///
+/// This represents a download mirror/link returned by the download_link.json endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DownloadLink {
+    /// Short name identifier for the download mirror (e.g., "Nexus CDN", "Premium")
+    #[serde(rename = "short_name")]
+    pub short_name: String,
+
+    /// Direct download URL
+    #[serde(rename = "URI")]
+    pub uri: String,
+}
+
+impl DownloadLink {
+    /// Create a new download link
+    pub fn new(short_name: String, uri: String) -> Self {
+        Self { short_name, uri }
+    }
+
+    /// Get the mirror name
+    pub fn mirror_name(&self) -> &str {
+        &self.short_name
+    }
+
+    /// Get the download URL
+    pub fn url(&self) -> &str {
+        &self.uri
+    }
+}
+
+impl fmt::Display for DownloadLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: {}", self.short_name, self.uri)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
