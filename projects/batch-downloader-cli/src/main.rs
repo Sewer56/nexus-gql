@@ -49,6 +49,14 @@
 //! 💾 Combined size: 2.5 GiB
 //! 📈 Average mod size: 26.9 MiB
 //!
+//! 🔍 ARCHIVE INSPECTED STATISTICS
+//! ─────────────────────────────────────
+//! 📁 Mods with archive contents inspected: 90
+//! 📁 Archive inspected mods with files: 90
+//! 📄 Archive inspected total files: 420
+//! 💾 Archive inspected combined size: 2.4 GiB
+//! 📈 Archive inspected average mod size: 27.2 MiB
+//!
 //! 🎯 FILTERED MODS STATISTICS
 //! ─────────────────────────────────────
 //! 📁 Filtered mods with files: 85
@@ -83,6 +91,8 @@ pub struct ModProcessingResult {
     pub total_size: u64,
     /// Whether this mod matched the extension filter (if any)
     pub matched_filter: bool,
+    /// Whether we successfully obtained archive contents for this mod (only relevant when file_extension filter is used)
+    pub archive_inspected: bool,
 }
 
 #[derive(Parser)]
@@ -273,6 +283,12 @@ async fn handle_mod_sizes(
     let mut total_files = 0;
     let mut filtered_mods = 0;
 
+    // Statistics for archive inspected mods
+    let mut archive_inspected_mods = 0;
+    let mut archive_inspected_total_size = 0u64;
+    let mut archive_inspected_mods_with_files = 0;
+    let mut archive_inspected_total_files = 0;
+
     // Statistics for filtered mods only
     let mut filtered_total_size = 0u64;
     let mut filtered_mods_with_files = 0;
@@ -282,6 +298,16 @@ async fn handle_mod_sizes(
         mods_with_files += result.mods_with_files;
         total_files += result.total_files;
         total_size += result.total_size;
+
+        // Track stats for mods where we successfully inspected archives
+        if result.archive_inspected {
+            archive_inspected_mods += 1;
+            if result.mods_with_files > 0 {
+                archive_inspected_mods_with_files += result.mods_with_files;
+                archive_inspected_total_files += result.total_files;
+                archive_inspected_total_size += result.total_size;
+            }
+        }
 
         // Track stats for mods that matched the filter
         if result.matched_filter {
@@ -303,6 +329,10 @@ async fn handle_mod_sizes(
         total_files,
         total_size,
         &file_extension,
+        archive_inspected_mods,
+        archive_inspected_mods_with_files,
+        archive_inspected_total_files,
+        archive_inspected_total_size,
         filtered_mods,
         filtered_mods_with_files,
         filtered_total_files,
@@ -354,7 +384,7 @@ async fn process_mod_files(
                 .sum();
 
             // Check file extension filter if specified
-            let matched_file_extension = if let Some(ext) = &file_extension {
+            let (matched_file_extension, archive_inspected) = if let Some(ext) = &file_extension {
                 // Need to check archive contents for each file to see if any contains the target extension
                 check_files_for_extension(
                     &client,
@@ -365,7 +395,7 @@ async fn process_mod_files(
                 )
                 .await
             } else {
-                true
+                (true, false) // No filter means all match, but no archive inspection was done
             };
 
             if !filtered_files.is_empty() {
@@ -386,6 +416,7 @@ async fn process_mod_files(
                     total_files: filtered_files.len(),
                     total_size: mod_size,
                     matched_filter: matched_file_extension,
+                    archive_inspected,
                 }
             } else {
                 print_mod_no_files(
@@ -402,6 +433,7 @@ async fn process_mod_files(
                     total_files: 0,
                     total_size: 0,
                     matched_filter: matched_file_extension,
+                    archive_inspected,
                 }
             }
         }
@@ -419,22 +451,27 @@ async fn process_mod_files(
                 total_files: 0,
                 total_size: 0,
                 matched_filter: false,
+                archive_inspected: false,
             }
         }
     }
 }
 
 /// Check if any of the mod files contain files with the specified extension
+/// Returns (matched_filter, archive_inspected) tuple
 async fn check_files_for_extension(
     client: &NexusClient,
     mod_info: &get_popular_mods_for_game_and_category_by_endorsements_descending::GetPopularModsForGameAndCategoryByEndorsementsDescendingModsNodes,
     files: &[&get_mod_files::GetModFilesModFiles],
     target_extension: &str,
     use_risky_method: bool,
-) -> bool {
+) -> (bool, bool) {
     let game_domain = &mod_info.game.domain_name;
     let mod_id = &mod_info.mod_id.to_string();
     let game_id = &mod_info.game.id.to_string();
+
+    let mut archive_inspected = false;
+    let mut matched_filter = false;
 
     for file in files {
         let file_id = &file.file_id.to_string();
@@ -461,6 +498,8 @@ async fn check_files_for_extension(
 
         match archive_contents_result {
             Ok(archive_contents) => {
+                archive_inspected = true;
+
                 // Check if any file in the archive has the target extension
                 let has_extension = archive_contents
                     .files
@@ -468,7 +507,8 @@ async fn check_files_for_extension(
                     .any(|archive_file| archive_file.extension() == Some(target_extension));
 
                 if has_extension {
-                    return true;
+                    matched_filter = true;
+                    return (matched_filter, archive_inspected);
                 }
             }
             Err(_) => {
@@ -479,7 +519,7 @@ async fn check_files_for_extension(
         }
     }
 
-    false
+    (matched_filter, archive_inspected)
 }
 
 /// Print successful mod processing result
@@ -558,6 +598,10 @@ fn print_summary(
     total_files: usize,
     total_size: u64,
     file_extension: &Option<String>,
+    archive_inspected_mods: usize,
+    archive_inspected_mods_with_files: usize,
+    archive_inspected_total_files: usize,
+    archive_inspected_total_size: u64,
     filtered_mods: usize,
     filtered_mods_with_files: usize,
     filtered_total_files: usize,
@@ -590,6 +634,30 @@ fn print_summary(
             "N/A".to_string()
         }
     );
+
+    // Show archive inspection statistics if a filter was applied
+    if file_extension.is_some() && archive_inspected_mods > 0 {
+        println!("\n🔍 ARCHIVE INSPECTED STATISTICS");
+        println!("─────────────────────────────────────");
+        println!("📁 Mods with archive contents inspected: {archive_inspected_mods}");
+        println!("📁 Archive inspected mods with files: {archive_inspected_mods_with_files}");
+        println!("📄 Archive inspected total files: {archive_inspected_total_files}");
+        println!(
+            "💾 Archive inspected combined size: {}",
+            ByteSizeString::from_u64(archive_inspected_total_size).format_bytes()
+        );
+        println!(
+            "📈 Archive inspected average mod size: {}",
+            if archive_inspected_mods_with_files > 0 {
+                ByteSizeString::from_u64(
+                    archive_inspected_total_size / archive_inspected_mods_with_files as u64,
+                )
+                .format_bytes()
+            } else {
+                "N/A".to_string()
+            }
+        );
+    }
 
     // Show filtered statistics if a filter was applied
     if file_extension.is_some() && filtered_mods > 0 {
