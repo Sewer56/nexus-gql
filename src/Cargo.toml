@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "projects/nexus-gql",
-    "projects/batch-downloader-cli",
+    "nexus-gql",
+    "batch-downloader-cli",
 ]
 
 # Optimized Release Build
