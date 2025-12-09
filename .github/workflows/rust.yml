@@ -2,14 +2,12 @@ name: Test, Upload Coverage and Release Rust
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
     tags:
-      - '*'
+      - "*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
-
-
 
 jobs:
   build-and-test:
@@ -51,7 +49,7 @@ jobs:
               # Run semver checks on stable, because nightly sometimes gets borked in cargo-semver-checks.
               rustup +stable target add ${{ matrix.target }}
               # Note: binstall is available after devops-rust-test-and-coverage@v1 call
-              cargo binstall --no-confirm cargo-semver-checks
+              cargo +stable binstall --no-confirm cargo-semver-checks
               cargo +stable semver-checks --target ${{ matrix.target }} 
           else
               echo "No previous version found on crates.io. Skipping semver checks."
@@ -87,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
+
       - name: Publish Rust Crate and Artifacts
         uses: Reloaded-Project/devops-publish-action@v3
         with:
@@ -96,9 +94,9 @@ jobs:
             src/nexus-gql
           compression-tool: 7z
           artifact-groups-file: .github/artifact-groups.yml
-          changelog-enabled: 'true'
+          changelog-enabled: "true"
           changelog-template: .github/changelog.hbs
           changelog-is-release: ${{ startsWith(github.ref, 'refs/tags/') }}
           changelog-release-tag: ${{ github.ref_name }}
-          changelog-override-starting-version: 'true'
-          changelog-hide-credit: 'true'
+          changelog-override-starting-version: "true"
+          changelog-hide-credit: "true"
