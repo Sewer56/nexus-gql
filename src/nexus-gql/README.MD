@@ -24,9 +24,9 @@ nexus-gql = "0.1.0"
 
 ### Feature Flags
 
-| Feature | Description |
-| ------- | ----------- |
-| `std` | Enable standard library support (enabled by default) |
+| Feature | Description                                          |
+| ------- | ---------------------------------------------------- |
+| `std`   | Enable standard library support (enabled by default) |
 
 ## Usage
 
@@ -47,4 +47,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## License
 
-Licensed under [GPL v3 (with Reloaded FAQ)](../../LICENSE).
+Licensed under [GPL v3 (with Reloaded FAQ)](https://github.com/Sewer56/nexus-gql/blob/main/LICENSE).
