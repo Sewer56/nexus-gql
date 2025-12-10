@@ -4,43 +4,41 @@
 [![Docs.rs](https://docs.rs/nexus-gql/badge.svg)](https://docs.rs/nexus-gql)
 [![CI](https://github.com/Sewer56/nexus-gql/actions/workflows/rust.yml/badge.svg)](https://github.com/Sewer56/nexus-gql/actions)
 
------------------------
+GraphQL API client for Nexus Mods. Built for batch downloading operations.
 
-## Additional Setup Required!!
+## Quick Start
 
-Additional setup might be required.  
-Once you do the stuff under this text, delete this section.  
+Add to your `Cargo.toml`:
 
-### Code Coverage
-To setup code coverage for this project. Login into [Codecov][codecov] and add this repository from your list of tracked repos.
+```toml
+[dependencies]
+nexus-gql = "0.1.0"
+```
 
-### Fill in Crate Description
+```rust
+use nexus_gql::{NexusClient, NexusConfig};
 
-This readme file (under the dashed line) is used for the crate description on GitHub and
-crates.io (if uploaded). Consider filling in this readme with examples for end users and any
-other useful info.
+let config = NexusConfig::new("your-api-key");
+let client = NexusClient::new(config)?;
+```
 
------------------------
+See the [nexus-gql crate documentation](./src/nexus-gql/README.MD) for detailed usage.
 
-## About
+## Crates
 
-Batch downloader from Nexus Mods, using GraphQL API.
+- [nexus-gql](./src/nexus-gql/README.MD): GraphQL client library for Nexus Mods API
+- [batch-downloader-cli](./src/batch-downloader-cli/): Command-line batch downloader (not published)
 
-## Testing
+## Developer Manual
 
-You will need to setup an API key.
+For step-by-step development guidance, see the [Developer Manual](https://reloaded-project.github.io/reloaded-templates-rust/manual/).
 
-## Development
+## Contributing
 
-For information on how to work with this codebase, see [README-DEV.MD](README-DEV.MD).
+We welcome contributions! See the [Contributing Guide](https://reloaded-project.github.io/reloaded-templates-rust/manual/#contributing) for details.
 
 ## License
 
-Licensed under [GPL v3 (with Reloaded FAQ)](./LICENSE).  
-
-[Learn more about Reloaded's general choice of licensing for projects.][reloaded-license].  
+Licensed under [GPL v3 (with Reloaded FAQ)](./LICENSE).
 
 [codecov]: https://about.codecov.io/
-[crates-io-key]: https://crates.io/settings/tokens
-[nuget-key]: https://www.nuget.org/account/apikeys
-[reloaded-license]: https://reloaded-project.github.io/Reloaded.MkDocsMaterial.Themes.R2/Pages/license/

@@ -1,0 +1,12 @@
+# Build output
+target
+/Cargo.lock
+
+# Profiling files
+perf.data.old
+perf.data
+flamegraph.svg
+
+# Code Coverage
+tarpaulin-report.html
+cobertura.xml

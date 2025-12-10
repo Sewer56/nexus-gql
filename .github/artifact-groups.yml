@@ -1,0 +1,2 @@
+# Artifact grouping configuration
+# This project only publishes Rust crates, no additional artifacts
