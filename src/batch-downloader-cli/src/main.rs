@@ -11,8 +11,10 @@ use std::{
     collections::HashMap,
     env,
     path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, OnceLock,
+    },
 };
 use tokio::{
     fs::{remove_file, File},
@@ -52,6 +54,25 @@ impl ModStatistics {
             None
         }
     }
+}
+
+/// Resolve the 7-Zip binary name, preferring `7z` and falling back to `7zz`.
+///
+/// `7zz` is the binary provided by the Nix package `_7zz`; `7z` is provided by
+/// p7zip. Resolved once per process and cached.
+fn seven_zip_binary() -> &'static str {
+    static BINARY: OnceLock<&'static str> = OnceLock::new();
+    BINARY.get_or_init(|| {
+        if std::process::Command::new("7z")
+            .arg("--help")
+            .output()
+            .is_ok()
+        {
+            "7z"
+        } else {
+            "7zz"
+        }
+    })
 }
 
 /// Result of processing a single mod's files
@@ -100,7 +121,7 @@ impl FileExtensionStatistics {
     /// Get sorted list of extensions by total size descending
     pub fn sorted_by_size(&self) -> Vec<(&String, &(usize, u64))> {
         let mut extensions: Vec<_> = self.extensions.iter().collect();
-        extensions.sort_by(|a, b| b.1 .1.cmp(&a.1 .1));
+        extensions.sort_by_key(|(_, (_, size))| std::cmp::Reverse(*size));
         extensions
     }
 }
@@ -228,15 +249,15 @@ async fn handle_mod_sizes(
             return Err("Output path is required when downloading files. Use --output-path".into());
         }
 
-        // Check if 7z is available
-        if (tokio::process::Command::new("7z")
+        // Check if a 7-Zip binary is available
+        if (tokio::process::Command::new(seven_zip_binary())
             .arg("--help")
             .output()
             .await)
             .is_err()
         {
             return Err(
-                "7z command not found. Please install 7-zip to use extraction functionality".into(),
+                "7-Zip command not found. Please install 7-Zip (p7zip `7z` or nixpkgs `_7zz`/`7zz`) to use extraction functionality".into(),
             );
         }
 
@@ -1007,7 +1028,7 @@ async fn extract_archive(
         archive_path.file_name().unwrap().to_string_lossy()
     );
 
-    let output = Command::new("7z")
+    let output = Command::new(seven_zip_binary())
         .arg("x")
         .arg(archive_path)
         .arg("-y") // Assume yes for all prompts
