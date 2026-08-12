@@ -1,6 +1,6 @@
 query GetPopularModsForGameAndCategoryByEndorsementsDescending(
   $gameId: String!,
-  $categoryName: String!,
+  $categoryName: [BaseFilterValue!],
   $count: Int = 20,
   $offset: Int = 0
 ) {
@@ -9,7 +9,7 @@ query GetPopularModsForGameAndCategoryByEndorsementsDescending(
     offset: $offset,
     filter: {
       gameId: { op: EQUALS, value: $gameId },
-      categoryName: { op: EQUALS, value: $categoryName }
+      categoryName: $categoryName
     },
     sort: [{ endorsements: { direction: DESC } }]
   ) {

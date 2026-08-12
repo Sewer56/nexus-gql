@@ -35,16 +35,36 @@ mod tests {
 
     #[test]
     fn get_popular_mods_query_generation() {
+        use get_popular_mods_for_game_and_category_by_endorsements_descending as query;
+
         // Test that the query generation works
+        let variables = query::Variables {
+            game_id: "1704".to_string(),
+            category_name: Some(vec![query::BaseFilterValue {
+                op: Some(query::FilterComparisonOperator::EQUALS),
+                value: "Models and Textures".to_string(),
+            }]),
+            count: Some(10),
+            offset: Some(0),
+        };
+
+        // Should not panic - this tests that code generation worked
+        let _query =
+            GetPopularModsForGameAndCategoryByEndorsementsDescending::build_query(variables);
+    }
+
+    /// A [`None`] category must stay valid: it leaves the filter unconstrained
+    /// so the query returns mods from every category.
+    #[test]
+    fn get_popular_mods_query_generation_without_category() {
         let variables =
             get_popular_mods_for_game_and_category_by_endorsements_descending::Variables {
                 game_id: "1704".to_string(),
-                category_name: "Models and Textures".to_string(),
+                category_name: None,
                 count: Some(10),
                 offset: Some(0),
             };
 
-        // Should not panic - this tests that code generation worked
         let _query =
             GetPopularModsForGameAndCategoryByEndorsementsDescending::build_query(variables);
     }

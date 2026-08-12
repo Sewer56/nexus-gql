@@ -144,7 +144,7 @@ enum Commands {
 
         /// Category name (e.g., "Models and Textures", "Gameplay", "Weapons", etc.)
         #[arg(short, long)]
-        category: String,
+        category: Option<String>,
 
         /// Number of mods to analyze (default: 1000, max: 1000)
         #[arg(short = 'n', long, default_value = "1000")]
@@ -223,7 +223,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 #[allow(clippy::too_many_arguments)]
 async fn handle_mod_sizes(
     game: String,
-    category: String,
+    category: Option<String>,
     count: i64,
     main_files_only: bool,
     concurrency: usize,
@@ -279,8 +279,29 @@ async fn handle_mod_sizes(
     // Resolve game identifier to game ID
     let game_id = resolve_game_id(&client, &game).await?;
 
-    println!("🎮 Analyzing mods for game ID: {game_id} in category: '{category}'");
+    match &category {
+        Some(category) => {
+            println!("🎮 Analyzing mods for game ID: {game_id} in category: '{category}'")
+        }
+        None => println!("🎮 Analyzing mods for game ID: {game_id} across all categories"),
+    }
     println!("📊 Getting first {count} popular mods...\n");
+
+    // A null `categoryName` filter leaves the category unconstrained, so the API
+    // returns mods from every category. Generated GraphQL input types are not
+    // [`Clone`], so the filter is rebuilt for each page rather than cloned.
+    let category_filter = || {
+        category.as_ref().map(|name| {
+            vec![
+                get_popular_mods_for_game_and_category_by_endorsements_descending::BaseFilterValue {
+                    op: Some(
+                        get_popular_mods_for_game_and_category_by_endorsements_descending::FilterComparisonOperator::EQUALS,
+                    ),
+                    value: name.clone(),
+                },
+            ]
+        })
+    };
 
     // Get popular mods in batches (API allows 80 max per request [undocumented])
     let mut all_mods = Vec::new();
@@ -294,7 +315,7 @@ async fn handle_mod_sizes(
         let variables =
             get_popular_mods_for_game_and_category_by_endorsements_descending::Variables {
                 game_id: game_id.clone(),
-                category_name: category.clone(),
+                category_name: category_filter(),
                 count: Some(current_batch_size as i64),
                 offset: Some(offset),
             };
@@ -315,7 +336,12 @@ async fn handle_mod_sizes(
     }
 
     if all_mods.is_empty() {
-        println!("❌ No mods found for game '{game}' in category '{category}'");
+        match &category {
+            Some(category) => {
+                println!("❌ No mods found for game '{game}' in category '{category}'")
+            }
+            None => println!("❌ No mods found for game '{game}'"),
+        }
         return Ok(());
     }
 
@@ -385,7 +411,7 @@ async fn handle_mod_sizes(
     print_summary(
         &game,
         &game_id,
-        &category,
+        category.as_deref(),
         all_mods.len(),
         &all_stats,
         &file_extension,
@@ -716,7 +742,7 @@ fn print_mod_processing_error(
 fn print_summary(
     game: &str,
     game_id: &str,
-    category: &str,
+    category: Option<&str>,
     total_mods_analyzed: usize,
     all_stats: &ModStatistics,
     file_extension: &Option<String>,
@@ -727,7 +753,7 @@ fn print_summary(
     println!("\n📊 SUMMARY");
     println!("═══════════════════════════════════════");
     println!("🎮 Game: {game} (ID: {game_id})");
-    println!("📂 Category: {category}");
+    println!("📂 Category: {}", category.unwrap_or("all categories"));
     println!("📊 Total mods analyzed: {total_mods_analyzed}");
 
     if let Some(ext) = file_extension {

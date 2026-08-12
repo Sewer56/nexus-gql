@@ -423,13 +423,16 @@ mod tests {
         let client = NexusClient::new();
 
         // Test variables for Skyrim Special Edition - Models and Textures
-        let variables =
-            get_popular_mods_for_game_and_category_by_endorsements_descending::Variables {
-                game_id: "1704".to_string(),
-                category_name: "Models and Textures".to_string(),
-                count: Some(5),
-                offset: Some(0),
-            };
+        use get_popular_mods_for_game_and_category_by_endorsements_descending as query;
+        let variables = query::Variables {
+            game_id: "1704".to_string(),
+            category_name: Some(vec![query::BaseFilterValue {
+                op: Some(query::FilterComparisonOperator::EQUALS),
+                value: "Models and Textures".to_string(),
+            }]),
+            count: Some(5),
+            offset: Some(0),
+        };
 
         execute_query_with_error_handling::<
             GetPopularModsForGameAndCategoryByEndorsementsDescending,
