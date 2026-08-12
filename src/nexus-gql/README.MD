@@ -33,13 +33,12 @@ nexus-gql = "0.1.0"
 ### Basic Example
 
 ```rust
-use nexus_gql::{NexusClient, NexusConfig};
+use nexus_gql::NexusClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let config = NexusConfig::new("your-api-key");
-    let client = NexusClient::new(config)?;
-    
+    let client = NexusClient::new().with_api_key("your-api-key".to_string());
+
     // Use client to query Nexus Mods API
     Ok(())
 }
